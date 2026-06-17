@@ -142,12 +142,35 @@ async fn build_client(
 
     client.ensure_genesis_in_place().await.context("failed to ensure genesis in place")?;
 
-    // Idempotent across restarts: only add the account if the store doesn't have it.
+    // Load: pull the faucet's current on-chain state if it's already deployed
+    // (best-effort — harmlessly fails if the network doesn't know it yet).
+    let _ = client.import_account_by_id(account_id).await;
+
+    // Track the `.mac` account locally if neither the store nor the network had it.
     if client.get_account(account_id).await?.is_none() {
-        client
-            .add_account(&account, false)
+        match client.add_account(&account, false).await {
+            Ok(()) => {}
+            Err(ClientError::AccountAlreadyTracked(_)) => {}
+            Err(e) => return Err(e).context("failed to add faucet account to store"),
+        }
+    }
+
+    // Create it on-chain if it isn't deployed yet: a brand-new account has nonce 0,
+    // so submit an empty transaction (nonce 0 -> 1) to deploy it from the `.mac`.
+    let tracked = client
+        .get_account(account_id)
+        .await?
+        .context("faucet account missing from store after load")?;
+    if tracked.is_new() {
+        tracing::info!(token = %token.symbol, faucet = %account_id, "faucet not on-chain — deploying from .mac");
+        let deploy = TransactionRequestBuilder::new()
+            .build()
+            .map_err(|e| anyhow::anyhow!("failed to build deploy transaction: {e}"))?;
+        submit_batch(&mut client, account_id, deploy)
             .await
-            .context("failed to add faucet account to store")?;
+            .context("failed to deploy faucet account")?;
+    } else {
+        tracing::info!(token = %token.symbol, faucet = %account_id, "loaded existing on-chain faucet account");
     }
 
     Ok((client, account_id))
@@ -253,7 +276,7 @@ async fn process_batch(
         }
         Err(e) => {
             let msg = format!("mint transaction failed: {e}");
-            tracing::error!(token = %symbol, error = %e, "mint failed");
+            tracing::error!(token = %symbol, error = ?e, "mint failed");
             for (job, _) in pending {
                 let _ = job.reply.send(Err(msg.clone()));
             }

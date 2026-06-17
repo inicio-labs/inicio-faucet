@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use clap::Args;
 use miden_client::account::component::{
     create_fungible_faucet, AccessControl, AuthScheme, BurnPolicyConfig, FungibleFaucet,
-    MintPolicyConfig, PolicyRegistration, TokenName, TokenPolicyManager, TransferPolicy,
+    MintPolicyConfig, PolicyRegistration, TokenName, TokenPolicyManager,
 };
 use miden_client::account::{AccountFile, AccountType};
 use miden_client::asset::{AssetAmount, TokenSymbol};
@@ -57,16 +57,14 @@ pub fn run(args: &CreateFaucetArgs) -> Result<()> {
         approver: (secret.public_key().to_commitment().into(), AuthScheme::Falcon512Poseidon2),
     };
 
-    // AllowAll policies (test faucet): mint/burn plus send/receive transfers.
+    // AllowAll mint/burn policies only. No send/receive transfer policies: those
+    // enable asset callbacks, which require a callback-aware custom mint script —
+    // the standard `own_output_notes` mint path can't satisfy them.
     let policies = TokenPolicyManager::new()
         .with_mint_policy(MintPolicyConfig::AllowAll, PolicyRegistration::Active)
         .map_err(|e| anyhow::anyhow!("mint policy: {e}"))?
         .with_burn_policy(BurnPolicyConfig::AllowAll, PolicyRegistration::Active)
-        .map_err(|e| anyhow::anyhow!("burn policy: {e}"))?
-        .with_send_policy(TransferPolicy::AllowAll, PolicyRegistration::Active)
-        .map_err(|e| anyhow::anyhow!("send policy: {e}"))?
-        .with_receive_policy(TransferPolicy::AllowAll, PolicyRegistration::Active)
-        .map_err(|e| anyhow::anyhow!("receive policy: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("burn policy: {e}"))?;
 
     let account = create_fungible_faucet(
         rand::random(),
