@@ -8,8 +8,8 @@
 # (repeat for TOKB / TOKC / TOKD), then reference them below.
 
 [rpc]
-# Miden node gRPC endpoint. Public testnet shown as default.
-endpoint = "https://rpc.testnet.miden.io"
+# Miden node gRPC endpoint. Devnet runs the 0.15 protocol this client speaks.
+endpoint = "https://rpc.devnet.miden.io"
 timeout_ms = 10000
 
 [server]

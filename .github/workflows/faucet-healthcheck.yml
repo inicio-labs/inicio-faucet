@@ -24,8 +24,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
-      # Override with a repo variable if you point at a different node.
-      RPC_ENDPOINT: ${{ vars.MIDEN_RPC_ENDPOINT || 'https://rpc.testnet.miden.io' }}
+      # Devnet runs the 0.15 protocol this client speaks. Override with the
+      # MIDEN_RPC_ENDPOINT repo variable to point at a different node.
+      RPC_ENDPOINT: ${{ vars.MIDEN_RPC_ENDPOINT || 'https://rpc.devnet.miden.io' }}
     steps:
       - uses: actions/checkout@v4
 

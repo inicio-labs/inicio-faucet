@@ -1,6 +1,6 @@
 # inicio-faucet
 
-Internal-only faucet service for the Miden testnet. Mints test tokens (P2ID notes)
+Internal-only faucet service for the Miden devnet. Mints test tokens (P2ID notes)
 to wallet addresses so the team can exercise the wallet and the nProtocol DEX.
 
 Four tokens, each backed by its own public fungible faucet account. A user enters an
@@ -65,8 +65,8 @@ static/            frontend (token cards, mint form, interaction game)
 
 `.github/workflows/faucet-healthcheck.yml` is a scheduled synthetic monitor (every
 6 hours, plus manual `workflow_dispatch`). Each run builds the service, starts it
-against the live testnet, mints a real note, and asserts the response carries a
-`tx_id`/`note_id` — i.e. that execute → prove → submit → apply all succeeded on
+against the configured node (devnet by default), mints a real note, and asserts the
+response carries a `tx_id`/`note_id` — i.e. that execute → prove → submit → apply all succeeded on
 chain. A failure (mint broken / node unreachable) fails the run and notifies
 watchers; the faucet log is uploaded as an artifact.
 
@@ -81,9 +81,9 @@ When the faucet is deployed behind a URL, a lighter black-box variant can simply
 
 ## Dependencies
 
-The miden crates use the crates.io `miden-client = "0.15"` release — the same
-version the deployed public-testnet faucet is built from — so this client speaks
-the protocol the live node at `rpc.testnet.miden.io` expects and minted notes are
-compatible with the wallet/DEX. All types come from `miden-client` re-exports. To
-target a different node, bump `miden-client`/`miden-client-sqlite-store` to the
+The miden crates use the crates.io `miden-client = "0.15"` release, which speaks
+the 0.15 protocol the devnet node at `rpc.devnet.miden.io` runs — so the client
+handshakes cleanly and minted notes are compatible with the wallet/DEX on devnet.
+All types come from `miden-client` re-exports. To target a different node, set the
+`endpoint` in `faucet.toml` and bump `miden-client`/`miden-client-sqlite-store` to the
 version that node runs.
