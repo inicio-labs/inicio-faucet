@@ -4,9 +4,9 @@
 //! over an `mpsc` channel, then awaits the worker's reply on the embedded
 //! `oneshot`. The `!Send` miden `Client` never appears here — only plain data.
 
-use miden_client::account::AccountId;
-use miden_client::address::{Address, AddressId};
-use miden_protocol::note::NoteType;
+use miden_client::account::{AccountId, Address};
+use miden_client::address::AddressId;
+use miden_client::note::NoteType;
 use tokio::sync::oneshot;
 
 /// A single mint request handed to a faucet worker.

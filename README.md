@@ -81,7 +81,9 @@ When the faucet is deployed behind a URL, a lighter black-box variant can simply
 
 ## Dependencies
 
-The miden crates are pinned (in `Cargo.toml`) to the same 0xMiden upstream `next`
-commits the solver builds against, so minted notes are compatible with the live
-testnet the wallet/DEX use. If the faucet is pointed at a fork-based private
-testnet instead, repoint those git revs to the matching inicio-labs fork commits.
+The miden crates use the crates.io `miden-client = "0.15"` release — the same
+version the deployed public-testnet faucet is built from — so this client speaks
+the protocol the live node at `rpc.testnet.miden.io` expects and minted notes are
+compatible with the wallet/DEX. All types come from `miden-client` re-exports. To
+target a different node, bump `miden-client`/`miden-client-sqlite-store` to the
+version that node runs.

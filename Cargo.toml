@@ -4,19 +4,13 @@ version = "0.1.0"
 edition = "2021"
 description = "Internal-only faucet service: mints test tokens (P2ID notes) to wallet addresses for testing the wallet and the nProtocol DEX."
 
-# Miden crates track 0xMiden upstream `next`, exactly like the solver (a working
-# sibling inicio service on rpc.testnet.miden.io). The exact commits are pinned in
-# Cargo.lock to the same proven 0.15.0 combo the solver resolves
-# (miden-client 715a560 / protocol c6f1ecf), so notes minted here are compatible
-# with the live testnet the wallet/DEX use. Use `branch = "next"` (not a per-crate
-# `rev`) so the protocol repo unifies to a single source with miden-client's own
-# internal protocol deps; the lockfile is what fixes the version. To move versions,
-# `cargo update`. For a fork-based private testnet, repoint these to the fork.
+# Miden crates use the crates.io 0.15.0 release — the same version the deployed
+# public-testnet faucet (faucet.testnet.miden.io) is built from, so this client
+# speaks the protocol the live node at rpc.testnet.miden.io expects. All types are
+# pulled from `miden-client` re-exports (no direct protocol/standards deps).
 [dependencies]
-miden-client = { git = "https://github.com/0xMiden/miden-client", branch = "next", default-features = false, features = ["std", "tonic"] }
-miden-client-sqlite-store = { git = "https://github.com/0xMiden/miden-client", branch = "next" }
-miden-protocol = { git = "https://github.com/0xMiden/protocol", branch = "next" }
-miden-standards = { git = "https://github.com/0xMiden/protocol", branch = "next" }
+miden-client = { version = "0.15", features = ["tonic"] }
+miden-client-sqlite-store = "0.15"
 
 tokio = { version = "1.40", features = ["rt", "rt-multi-thread", "macros", "sync", "time", "signal"] }
 tokio-util = { version = "0.7", default-features = false, features = ["rt"] }

@@ -6,8 +6,8 @@
 //!  1. `!Send` isolation — the `Client` stays on its thread.
 //!  2. Nonce serialization — one worker per faucet => its transactions are
 //!     strictly sequential, so there are no in-flight nonce conflicts.
-//!  3. Batching — the worker drains its queue over a time window and mints all
-//!     pending requests as a single transaction with N P2ID notes.
+//!  3. Batching — the worker drains its queue and mints all pending requests as a
+//!     single transaction with N P2ID notes.
 
 use std::future::Future;
 use std::path::PathBuf;
@@ -19,12 +19,12 @@ use miden_client::account::{AccountFile, AccountId};
 use miden_client::asset::FungibleAsset;
 use miden_client::builder::ClientBuilder;
 use miden_client::keystore::{FilesystemKeyStore, Keystore};
-use miden_client::rpc::{Endpoint, GrpcClient};
-use miden_client::transaction::TransactionRequestBuilder;
-use miden_client::{Client, Serializable};
-use miden_client_sqlite_store::ClientBuilderSqliteExt;
-use miden_protocol::note::{Note, NoteAttachment, NoteDetails, NoteFile, NoteType};
-use miden_standards::note::P2idNote;
+use miden_client::note::{Note, NoteAttachments, NoteDetails, NoteFile, NoteType, P2idNote};
+use miden_client::rpc::Endpoint;
+use miden_client::transaction::{TransactionId, TransactionRequest, TransactionRequestBuilder};
+use miden_client::utils::Serializable;
+use miden_client::{Client, ClientError};
+use miden_client_sqlite_store::SqliteStore;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
@@ -38,9 +38,8 @@ pub struct WorkerParams {
     pub token: TokenConfig,
     pub rx: mpsc::Receiver<MintJob>,
     pub cancel: CancellationToken,
-    /// Reports readiness (client built + account imported + initial sync) or a
-    /// startup error, so failures surface at the startup gate instead of in a
-    /// detached thread.
+    /// Reports readiness (client built + account imported) or a startup error, so
+    /// failures surface at the startup gate instead of in a detached thread.
     pub ready: oneshot::Sender<Result<(), String>>,
     pub max_batch: usize,
 }
@@ -131,15 +130,17 @@ async fn build_client(
 
     let endpoint = Endpoint::try_from(rpc.endpoint.as_str())
         .map_err(|e| anyhow::anyhow!("invalid rpc endpoint {}: {e}", rpc.endpoint))?;
-    let rpc_client = Arc::new(GrpcClient::new(&endpoint, rpc.timeout_ms));
+    let store = Arc::new(SqliteStore::new(PathBuf::from(&token.store_path)).await?);
 
     let mut client = ClientBuilder::new()
-        .rpc(rpc_client)
-        .sqlite_store(PathBuf::from(&token.store_path))
+        .grpc_client(&endpoint, Some(rpc.timeout_ms))
         .authenticator(Arc::new(keystore))
+        .store(store)
         .build()
         .await
         .context("failed to build miden client")?;
+
+    client.ensure_genesis_in_place().await.context("failed to ensure genesis in place")?;
 
     // Idempotent across restarts: only add the account if the store doesn't have it.
     if client.get_account(account_id).await?.is_none() {
@@ -150,6 +151,20 @@ async fn build_client(
     }
 
     Ok((client, account_id))
+}
+
+/// Execute → prove → submit → apply a transaction, returning its id.
+async fn submit_batch(
+    client: &mut Client<FilesystemKeyStore>,
+    faucet_id: AccountId,
+    request: TransactionRequest,
+) -> Result<TransactionId, ClientError> {
+    let tx_result = client.execute_transaction(faucet_id, request).await?;
+    let tx_id = tx_result.executed_transaction().id();
+    let proven = client.prove_transaction(&tx_result).await?;
+    let height = client.submit_proven_transaction(proven, &tx_result).await?;
+    client.apply_transaction(&tx_result, height).await?;
+    Ok(tx_id)
 }
 
 /// Build one P2ID note per job, mint them all in a single transaction, and reply
@@ -183,7 +198,7 @@ async fn process_batch(
             job.target,
             vec![asset.into()],
             job.note_type,
-            NoteAttachment::default(),
+            NoteAttachments::default(),
             client.rng(),
         ) {
             Ok(note) => note,
@@ -213,7 +228,7 @@ async fn process_batch(
     };
 
     tracing::info!(token = %symbol, batch = count, "minting batch");
-    match client.submit_new_transaction(faucet_id, request).await {
+    match submit_batch(client, faucet_id, request).await {
         Ok(tx_id) => {
             let tx_hex = tx_id.to_hex();
             for (job, note) in pending {
