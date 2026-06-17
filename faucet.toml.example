@@ -1,0 +1,50 @@
+# inicio-faucet config. Copy to `faucet.toml` (gitignored) and fill in.
+#
+#   cp faucet.toml.example faucet.toml
+#
+# Produce the four .mac files first:
+#   inicio-faucet create-faucet --symbol TOKA --name "Token A" --decimals 8 \
+#       --max-supply 1000000000000 --out ./faucets/toka.mac
+# (repeat for TOKB / TOKC / TOKD), then reference them below.
+
+[rpc]
+# Miden node gRPC endpoint. Public testnet shown as default.
+endpoint = "https://rpc.testnet.miden.io"
+timeout_ms = 10000
+
+[server]
+bind = "127.0.0.1:8080"
+max_batch_size = 256        # max notes minted per tx; bursts coalesce while proving
+static_dir = "static"       # frontend directory served by the same binary
+
+[[tokens]]
+symbol = "TOKA"
+name = "Token A"
+decimals = 8
+account_file = "./faucets/toka.mac"
+store_path = "./faucets/toka.sqlite3"
+keystore_path = "./faucets/toka_keystore"
+
+[[tokens]]
+symbol = "TOKB"
+name = "Token B"
+decimals = 8
+account_file = "./faucets/tokb.mac"
+store_path = "./faucets/tokb.sqlite3"
+keystore_path = "./faucets/tokb_keystore"
+
+[[tokens]]
+symbol = "TOKC"
+name = "Token C"
+decimals = 8
+account_file = "./faucets/tokc.mac"
+store_path = "./faucets/tokc.sqlite3"
+keystore_path = "./faucets/tokc_keystore"
+
+[[tokens]]
+symbol = "TOKD"
+name = "Token D"
+decimals = 8
+account_file = "./faucets/tokd.mac"
+store_path = "./faucets/tokd.sqlite3"
+keystore_path = "./faucets/tokd_keystore"

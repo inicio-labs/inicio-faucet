@@ -1,0 +1,6 @@
+/target
+faucet.toml
+/faucets/*.mac
+/faucets/*.sqlite3*
+/faucets/*_keystore/
+.note-transport.pid

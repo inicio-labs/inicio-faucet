@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Miden Faucet</title>
+  <link rel="icon" href="/favicon.ico" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@100..900&family=Geist:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <img src="/header.png" alt="Miden Faucet" class="header-image" />
+    </header>
+
+    <main class="main-content">
+      <div class="form-group">
+        <label for="recipient-address" class="form-label">Recipient address</label>
+        <input type="text" id="recipient-address" class="form-input" placeholder="mtst1… or 0x… account id" autocomplete="off" spellcheck="false" />
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Token</label>
+        <div class="token-grid" id="token-grid">
+          <div class="token-loading">Loading tokens…</div>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label for="token-amount" class="form-label">Amount</label>
+        <input type="number" id="token-amount" class="form-input" min="1" step="1" value="1000000000" />
+        <div class="token-amount-hint" id="token-amount-hint">Amount in base units.</div>
+      </div>
+
+      <div class="form-group" style="margin-top: 22px;">
+        <label class="form-label">Clear 100 to unlock minting <span class="label-hint" id="game-status">— space / tap to jump the asteroids</span></label>
+        <div class="game-card">
+          <canvas id="game" width="640" height="180" aria-label="Astronaut runner game"></canvas>
+          <div class="game-overlay" id="game-overlay">
+            <button type="button" class="game-start" id="start-btn">Press space / tap to launch</button>
+          </div>
+        </div>
+        <div class="game-meta">
+          <span id="score">Score 0</span>
+          <span id="goal">Goal 100</span>
+        </div>
+      </div>
+
+      <div class="button-group">
+        <button type="button" class="button primary" id="send-public-button" disabled>
+          <svg class="button-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+            <circle cx="12" cy="12" r="3"></circle>
+          </svg>
+          Send Public Note
+        </button>
+        <div class="note">or</div>
+        <button type="button" class="button" id="send-private-button" disabled>
+          <svg class="button-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+            <circle cx="12" cy="12" r="3"></circle>
+            <line x1="3" y1="3" x2="21" y2="21"></line>
+          </svg>
+          Send Private Note
+        </button>
+        <div class="note" style="margin-top: 15px;">Private note data is not visible on-chain</div>
+      </div>
+
+      <div class="result" id="result" hidden></div>
+    </main>
+  </div>
+
+  <footer class="footer">
+    <div class="footer-content">
+      <div class="footer-brand"><img src="/favicon.ico" alt="" class="footer-logo" />MIDEN · testnet faucet</div>
+      <div class="footer-note">internal use only — no rate limit</div>
+    </div>
+  </footer>
+
+  <script src="/game.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

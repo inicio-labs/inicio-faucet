@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "faucet",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "exec ./target/debug/inicio-faucet --config faucet.toml"],
+      "port": 8080
+    }
+  ]
+}
