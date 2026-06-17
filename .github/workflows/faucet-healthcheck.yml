@@ -1,0 +1,141 @@
+name: Faucet health check
+
+# Scheduled synthetic monitor: builds the service, starts it against the live
+# testnet, mints a real note, and fails (notifying watchers) if minting breaks.
+on:
+  schedule:
+    - cron: "0 */6 * * *" # every 6 hours
+  workflow_dispatch:
+    inputs:
+      recipient:
+        description: "Recipient account id (bech32 mtst1… or 0x… hex). Blank = self-mint to the test faucet."
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: faucet-healthcheck
+  cancel-in-progress: false
+
+jobs:
+  mint-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      # Override with a repo variable if you point at a different node.
+      RPC_ENDPOINT: ${{ vars.MIDEN_RPC_ENDPOINT || 'https://rpc.testnet.miden.io' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build (release)
+        run: cargo build --release --locked
+
+      - name: Provision test faucet
+        id: faucet
+        env:
+          # Optional: base64 of a .mac to reuse one persistent test faucet across runs.
+          # If unset, a throwaway faucet is created each run.
+          FAUCET_MAC_B64: ${{ secrets.FAUCET_MAC_B64 }}
+        run: |
+          set -euo pipefail
+          mkdir -p faucets
+          if [ -n "${FAUCET_MAC_B64:-}" ]; then
+            echo "Using stored faucet .mac from secret FAUCET_MAC_B64"
+            printf '%s' "$FAUCET_MAC_B64" | base64 -d > faucets/health.mac
+            echo "faucet_id=" >> "$GITHUB_OUTPUT"
+          else
+            echo "Creating a throwaway faucet for this run"
+            out=$(./target/release/inicio-faucet create-faucet \
+              --symbol HLT --name "Healthcheck" --decimals 8 \
+              --max-supply 1000000000000000 --out faucets/health.mac)
+            echo "$out"
+            echo "faucet_id=$(echo "$out" | awk '/account id:/{print $3}')" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Write config
+        run: |
+          set -euo pipefail
+          cat > faucet.toml <<EOF
+          [rpc]
+          endpoint = "${RPC_ENDPOINT}"
+          timeout_ms = 30000
+
+          [server]
+          bind = "127.0.0.1:8080"
+          max_batch_size = 16
+
+          [[tokens]]
+          symbol = "HLT"
+          name = "Healthcheck"
+          decimals = 8
+          account_file = "faucets/health.mac"
+          store_path = "faucets/health.sqlite3"
+          keystore_path = "faucets/health_keystore"
+          EOF
+          cat faucet.toml
+
+      - name: Start faucet
+        run: |
+          RUST_LOG=info ./target/release/inicio-faucet --config faucet.toml > faucet.log 2>&1 &
+          echo $! > faucet.pid
+
+      - name: Wait for readiness
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8080/readyz >/dev/null 2>&1; then
+              echo "faucet ready"; exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::faucet did not become ready in time"
+          cat faucet.log
+          exit 1
+
+      - name: Mint a note and verify
+        env:
+          RECIPIENT_INPUT: ${{ github.event.inputs.recipient }}
+          RECIPIENT_VAR: ${{ vars.FAUCET_TEST_RECIPIENT }}
+          FAUCET_ID: ${{ steps.faucet.outputs.faucet_id }}
+        run: |
+          set -euo pipefail
+          RECIPIENT="${RECIPIENT_INPUT:-}"
+          [ -z "$RECIPIENT" ] && RECIPIENT="${RECIPIENT_VAR:-}"
+          [ -z "$RECIPIENT" ] && RECIPIENT="${FAUCET_ID:-}"
+          if [ -z "$RECIPIENT" ]; then
+            echo "::error::no recipient — set repo variable FAUCET_TEST_RECIPIENT (or omit FAUCET_MAC_B64 to self-mint)"
+            exit 1
+          fi
+          echo "Minting HLT to $RECIPIENT via $RPC_ENDPOINT"
+          resp=$(curl -sS -m 180 -w $'\n%{http_code}' -X POST http://127.0.0.1:8080/api/mint \
+            -H 'content-type: application/json' \
+            -d "{\"token\":\"HLT\",\"address\":\"$RECIPIENT\",\"amount\":1000000000,\"note_type\":\"public\"}")
+          code=$(printf '%s' "$resp" | tail -n1)
+          body=$(printf '%s' "$resp" | sed '$d')
+          echo "HTTP $code"
+          echo "$body"
+          if [ "$code" != "200" ]; then
+            echo "::error::mint failed (HTTP $code)"
+            echo "--- faucet log ---"; cat faucet.log
+            exit 1
+          fi
+          echo "$body" | jq -e 'has("tx_id") and has("note_id")' >/dev/null \
+            || { echo "::error::response missing tx_id/note_id"; exit 1; }
+          echo "✅ minted: $(echo "$body" | jq -r '"tx=" + .tx_id + "  note=" + .note_id')"
+
+      - name: Stop faucet
+        if: always()
+        run: kill "$(cat faucet.pid)" 2>/dev/null || true
+
+      - name: Upload faucet log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: faucet-log
+          path: faucet.log
+          if-no-files-found: ignore

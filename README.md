@@ -61,6 +61,24 @@ static/            frontend (token cards, mint form, interaction game)
   Returns `{ tx_id, note_id, note_b64? }`.
 - `GET /health` (liveness), `GET /readyz` (readiness).
 
+## Health check (CI)
+
+`.github/workflows/faucet-healthcheck.yml` is a scheduled synthetic monitor (every
+6 hours, plus manual `workflow_dispatch`). Each run builds the service, starts it
+against the live testnet, mints a real note, and asserts the response carries a
+`tx_id`/`note_id` — i.e. that execute → prove → submit → apply all succeeded on
+chain. A failure (mint broken / node unreachable) fails the run and notifies
+watchers; the faucet log is uploaded as an artifact.
+
+By default it creates a throwaway faucet per run and self-mints. Optional config:
+- repo variable `FAUCET_TEST_RECIPIENT` — mint to a specific wallet instead of self.
+- repo variable `MIDEN_RPC_ENDPOINT` — point at a different node.
+- repo secret `FAUCET_MAC_B64` — base64 of a `.mac` to reuse one persistent test
+  faucet across runs (set `FAUCET_TEST_RECIPIENT` too, since the id isn't derived).
+
+When the faucet is deployed behind a URL, a lighter black-box variant can simply
+`POST /api/mint` against the deployment instead of building it each run.
+
 ## Dependencies
 
 The miden crates are pinned (in `Cargo.toml`) to the same 0xMiden upstream `next`
