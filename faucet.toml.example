@@ -24,6 +24,8 @@ decimals = 8
 account_file = "./faucets/toka.mac"
 store_path = "./faucets/toka.sqlite3"
 keystore_path = "./faucets/toka_keystore"
+# Optional: cap the amount mintable per request (base units). Omit for uncapped.
+# max_mint_amount = 100000000000
 
 [[tokens]]
 symbol = "TOKB"

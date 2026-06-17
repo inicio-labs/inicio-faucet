@@ -17,6 +17,7 @@ use anyhow::{Context, Result};
 use base64::prelude::{Engine as _, BASE64_STANDARD};
 use miden_client::account::{AccountFile, AccountId};
 use miden_client::asset::FungibleAsset;
+use miden_client::block::BlockNumber;
 use miden_client::builder::ClientBuilder;
 use miden_client::keystore::{FilesystemKeyStore, Keystore};
 use miden_client::note::{Note, NoteAttachments, NoteDetails, NoteFile, NoteType, P2idNote};
@@ -142,26 +143,40 @@ async fn build_client(
 
     client.ensure_genesis_in_place().await.context("failed to ensure genesis in place")?;
 
-    // Load: pull the faucet's current on-chain state if it's already deployed
-    // (best-effort — harmlessly fails if the network doesn't know it yet).
-    let _ = client.import_account_by_id(account_id).await;
-
-    // Track the `.mac` account locally if neither the store nor the network had it.
-    if client.get_account(account_id).await?.is_none() {
-        match client.add_account(&account, false).await {
-            Ok(()) => {}
-            Err(ClientError::AccountAlreadyTracked(_)) => {}
-            Err(e) => return Err(e).context("failed to add faucet account to store"),
+    // Load: pull the faucet's current on-chain state if it's already deployed. A
+    // successful import (or a pre-existing store record from a prior run) means we
+    // have the live account; `AccountNotFoundOnChain` means it genuinely needs
+    // deploying; any other error (node unreachable, etc.) is NOT treated as
+    // "not deployed" — we refuse to guess rather than risk re-deploying a live account.
+    let import = client.import_account_by_id(account_id).await;
+    let tracked = client.get_account(account_id).await?;
+    let record = match (tracked, import) {
+        (Some(record), _) => record,
+        (None, Err(ClientError::AccountNotFoundOnChain(_))) => {
+            // Genuinely not on-chain yet — track the `.mac` account so we can deploy it.
+            match client.add_account(&account, false).await {
+                Ok(()) | Err(ClientError::AccountAlreadyTracked(_)) => {}
+                Err(e) => return Err(e).context("failed to add faucet account to store"),
+            }
+            client
+                .get_account(account_id)
+                .await?
+                .context("faucet account missing from store after add")?
         }
-    }
+        (None, Err(e)) => {
+            return Err(e).context(
+                "faucet is not in the local store and could not be loaded from the node — \
+                 refusing to deploy without confirming its on-chain state",
+            );
+        }
+        (None, Ok(())) => {
+            anyhow::bail!("faucet import reported success but the account is not tracked");
+        }
+    };
 
     // Create it on-chain if it isn't deployed yet: a brand-new account has nonce 0,
     // so submit an empty transaction (nonce 0 -> 1) to deploy it from the `.mac`.
-    let tracked = client
-        .get_account(account_id)
-        .await?
-        .context("faucet account missing from store after load")?;
-    if tracked.is_new() {
+    if record.is_new() {
         tracing::info!(token = %token.symbol, faucet = %account_id, "faucet not on-chain — deploying from .mac");
         let deploy = TransactionRequestBuilder::new()
             .build()
@@ -176,18 +191,19 @@ async fn build_client(
     Ok((client, account_id))
 }
 
-/// Execute → prove → submit → apply a transaction, returning its id.
+/// Execute → prove → submit → apply a transaction, returning its id and the block
+/// height at which it was committed.
 async fn submit_batch(
     client: &mut Client<FilesystemKeyStore>,
     faucet_id: AccountId,
     request: TransactionRequest,
-) -> Result<TransactionId, ClientError> {
+) -> Result<(TransactionId, BlockNumber), ClientError> {
     let tx_result = client.execute_transaction(faucet_id, request).await?;
     let tx_id = tx_result.executed_transaction().id();
     let proven = client.prove_transaction(&tx_result).await?;
     let height = client.submit_proven_transaction(proven, &tx_result).await?;
     client.apply_transaction(&tx_result, height).await?;
-    Ok(tx_id)
+    Ok((tx_id, height))
 }
 
 /// Build one P2ID note per job, mint them all in a single transaction, and reply
@@ -252,15 +268,17 @@ async fn process_batch(
 
     tracing::info!(token = %symbol, batch = count, "minting batch");
     match submit_batch(client, faucet_id, request).await {
-        Ok(tx_id) => {
+        Ok((tx_id, height)) => {
             let tx_hex = tx_id.to_hex();
             for (job, note) in pending {
                 let note_b64 = if matches!(job.note_type, NoteType::Private) {
                     let details =
                         NoteDetails::new(note.assets().clone(), note.recipient().clone());
+                    // `after_block_num` hints the recipient's wallet when the note becomes
+                    // consumable — the block this mint was committed in.
                     let file = NoteFile::NoteDetails {
                         details,
-                        after_block_num: 0u32.into(),
+                        after_block_num: height,
                         tag: Some(note.metadata().tag()),
                     };
                     Some(BASE64_STANDARD.encode(file.to_bytes()))

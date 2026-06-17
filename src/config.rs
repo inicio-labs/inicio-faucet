@@ -48,6 +48,9 @@ pub struct TokenConfig {
     pub store_path: String,
     /// Per-faucet keystore directory.
     pub keystore_path: String,
+    /// Optional cap on the amount mintable per request (base units). Unset = uncapped.
+    #[serde(default)]
+    pub max_mint_amount: Option<u64>,
 }
 
 fn default_max_batch_size() -> usize {
@@ -66,6 +69,9 @@ impl FaucetConfig {
             toml::from_str(&content).with_context(|| format!("failed to parse config file: {path}"))?;
         if config.tokens.is_empty() {
             anyhow::bail!("config has no [[tokens]] entries");
+        }
+        if config.server.max_batch_size == 0 {
+            anyhow::bail!("server.max_batch_size must be at least 1");
         }
         Ok(config)
     }

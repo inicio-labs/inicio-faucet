@@ -73,7 +73,7 @@ async fn serve(config_path: &str) -> Result<()> {
     for token in &config.tokens {
         if senders.contains_key(&token.symbol) {
             cancel.cancel();
-            join_all(handles);
+            join_all(handles).await;
             anyhow::bail!("duplicate token symbol in config: {}", token.symbol);
         }
         let (tx, rx) = mpsc::channel::<MintJob>(1024);
@@ -83,6 +83,7 @@ async fn serve(config_path: &str) -> Result<()> {
             symbol: token.symbol.clone(),
             name: token.name.clone(),
             decimals: token.decimals,
+            max_amount: token.max_mint_amount,
         });
         let params = WorkerParams {
             rpc: config.rpc.clone(),
@@ -96,19 +97,19 @@ async fn serve(config_path: &str) -> Result<()> {
         ready_rxs.push((token.symbol.clone(), ready_rx));
     }
 
-    // Startup gate: every worker must report ready (client built + account
-    // imported + initial sync) before we serve, so failures surface here.
+    // Startup gate: every worker must report ready (client built + faucet
+    // loaded/deployed) before we serve, so startup failures surface here.
     for (symbol, rx) in ready_rxs {
         match rx.await {
             Ok(Ok(())) => {}
             Ok(Err(e)) => {
                 cancel.cancel();
-                join_all(handles);
+                join_all(handles).await;
                 anyhow::bail!("faucet {symbol} failed to start: {e}");
             }
             Err(_) => {
                 cancel.cancel();
-                join_all(handles);
+                join_all(handles).await;
                 anyhow::bail!("faucet {symbol} worker exited before signalling readiness");
             }
         }
@@ -127,7 +128,8 @@ async fn serve(config_path: &str) -> Result<()> {
         let cancel = cancel.clone();
         async move {
             tokio::select! {
-                _ = tokio::signal::ctrl_c() => tracing::info!("ctrl-c received, shutting down"),
+                _ = tokio::signal::ctrl_c() => tracing::info!("SIGINT received, shutting down"),
+                _ = terminate_signal() => tracing::info!("SIGTERM received, shutting down"),
                 _ = cancel.cancelled() => {}
             }
         }
@@ -135,12 +137,34 @@ async fn serve(config_path: &str) -> Result<()> {
     let serve_result = axum::serve(listener, app).with_graceful_shutdown(shutdown).await;
 
     cancel.cancel();
-    join_all(handles);
+    join_all(handles).await;
     serve_result.context("http server error")
 }
 
-fn join_all(handles: Vec<std::thread::JoinHandle<()>>) {
+async fn join_all(handles: Vec<std::thread::JoinHandle<()>>) {
     for handle in handles {
-        let _ = handle.join();
+        // `JoinHandle::join` blocks; run it off the async runtime so a worker
+        // mid-proving at shutdown doesn't stall a tokio thread.
+        let _ = tokio::task::spawn_blocking(move || handle.join()).await;
     }
+}
+
+/// Resolves when the process receives SIGTERM (the signal `docker stop` /
+/// systemd / k8s send). On non-unix it never resolves.
+async fn terminate_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        match signal(SignalKind::terminate()) {
+            Ok(mut sig) => {
+                sig.recv().await;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to install SIGTERM handler");
+                std::future::pending::<()>().await;
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    std::future::pending::<()>().await;
 }

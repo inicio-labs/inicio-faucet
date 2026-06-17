@@ -82,6 +82,14 @@ pub fn run(args: &CreateFaucetArgs) -> Result<()> {
         .write(&args.out)
         .with_context(|| format!("failed to write account file {}", args.out))?;
 
+    // The .mac contains the faucet's Falcon signing key — restrict to owner-only.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&args.out, std::fs::Permissions::from_mode(0o600))
+            .with_context(|| format!("failed to set 0600 permissions on {}", args.out))?;
+    }
+
     println!("Created public fungible faucet");
     println!("  symbol:     {}", args.symbol);
     println!("  decimals:   {}", args.decimals);

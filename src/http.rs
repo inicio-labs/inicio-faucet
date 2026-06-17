@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -16,12 +17,19 @@ use tower_http::services::ServeDir;
 
 use crate::mint::{parse_address, parse_note_type, MintJob, MintOutcome};
 
+/// Upper bound on how long a mint request waits for its worker (local proving can
+/// take tens of seconds to minutes). Past this we return 504 rather than hang.
+const MINT_TIMEOUT: Duration = Duration::from_secs(300);
+
 /// Token metadata exposed to the UI.
 #[derive(Debug, Clone, Serialize)]
 pub struct TokenMeta {
     pub symbol: String,
     pub name: String,
     pub decimals: u8,
+    /// Optional per-request mint cap (base units); enforced on `/api/mint`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_amount: Option<u64>,
 }
 
 /// Shared HTTP state. Cheap to clone (everything is `Arc`).
@@ -67,6 +75,15 @@ async fn mint(State(state): State<AppState>, Json(req): Json<MintRequest>) -> Re
     if req.amount == 0 {
         return (StatusCode::BAD_REQUEST, "amount must be greater than 0".to_string()).into_response();
     }
+    if let Some(max) = state.tokens.iter().find(|t| t.symbol == req.token).and_then(|t| t.max_amount) {
+        if req.amount > max {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("amount {} exceeds the per-request cap of {} for {}", req.amount, max, req.token),
+            )
+                .into_response();
+        }
+    }
     let target = match parse_address(&req.address) {
         Ok(target) => target,
         Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
@@ -83,12 +100,17 @@ async fn mint(State(state): State<AppState>, Json(req): Json<MintRequest>) -> Re
             .into_response();
     }
 
-    match reply_rx.await {
-        Ok(Ok(outcome)) => (StatusCode::OK, Json::<MintOutcome>(outcome)).into_response(),
-        Ok(Err(e)) => (StatusCode::BAD_GATEWAY, e).into_response(),
-        Err(_) => {
+    match tokio::time::timeout(MINT_TIMEOUT, reply_rx).await {
+        Ok(Ok(Ok(outcome))) => (StatusCode::OK, Json::<MintOutcome>(outcome)).into_response(),
+        Ok(Ok(Err(e))) => (StatusCode::BAD_GATEWAY, e).into_response(),
+        Ok(Err(_)) => {
             (StatusCode::BAD_GATEWAY, "no response from faucet worker".to_string()).into_response()
         }
+        Err(_) => (
+            StatusCode::GATEWAY_TIMEOUT,
+            "mint timed out (proving took too long)".to_string(),
+        )
+            .into_response(),
     }
 }
 

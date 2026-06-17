@@ -75,7 +75,7 @@
         body: JSON.stringify({
           token: state.token,
           address: addrEl.value.trim(),
-          amount: Number(amtEl.value),
+          amount: Math.trunc(Number(amtEl.value)),
           note_type: noteType,
         }),
       });
