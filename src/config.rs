@@ -15,9 +15,13 @@ pub struct FaucetConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RpcConfig {
-    /// Miden node gRPC endpoint, e.g. `https://rpc.testnet.miden.io`.
+    /// Miden node gRPC endpoint, e.g. `https://rpc.devnet.miden.io`.
     pub endpoint: String,
     pub timeout_ms: u64,
+    /// Optional remote transaction prover (e.g. `https://tx-prover.devnet.miden.io`).
+    /// When unset, transactions are proved locally (CPU-heavy).
+    #[serde(default)]
+    pub remote_prover_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

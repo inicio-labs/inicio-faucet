@@ -1,0 +1,33 @@
+# Internal faucet deployment.
+#
+# One-time setup (writes the 4 faucet .mac files into the named volume):
+#   docker compose run --rm faucet create-faucet --symbol TOKA --name "Token A" \
+#       --decimals 8 --max-supply 1000000000000000 --out faucets/toka.mac
+#   ... repeat for TOKB / TOKC / TOKD ...
+#
+# Then put your faucet.toml next to this file (bind MUST be "0.0.0.0:8080" for the
+# container, account_file = "faucets/<x>.mac"), and:
+#   docker compose up -d
+#
+# Keep this service on your internal network / behind a VPN or authenticated proxy:
+# it mints assets and has no built-in auth.
+services:
+  faucet:
+    build: .
+    # In CI, build + push to ghcr.io and pin the image instead of building here:
+    # image: ghcr.io/inicio-labs/inicio-faucet:latest
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./faucet.toml:/app/faucet.toml:ro
+      - faucet-data:/app/faucets
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/readyz"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 120s
+
+volumes:
+  faucet-data:

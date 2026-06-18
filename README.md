@@ -52,6 +52,35 @@ static/            frontend (token cards, mint form, interaction game)
 
    Then open http://127.0.0.1:8080.
 
+## Deployment (Docker)
+
+Recommended: build a container in CI, push to `ghcr.io`, and run it on internal
+infra with a persistent volume for `faucets/` (the signing keys + per-faucet state).
+The `Dockerfile` (multi-stage) and `docker-compose.yml` are included.
+
+```
+# 1. Create the four faucets into the data volume (writes .mac files):
+docker compose run --rm faucet create-faucet --symbol TOKA --name "Token A" \
+    --decimals 8 --max-supply 1000000000000000 --out faucets/toka.mac
+#    ... repeat for TOKB / TOKC / TOKD ...
+
+# 2. Put faucet.toml next to docker-compose.yml. For the container set
+#    bind = "0.0.0.0:8080" and account_file = "faucets/<x>.mac".
+
+# 3. Run it:
+docker compose up -d            # /readyz drives the container healthcheck
+```
+
+Operational notes specific to this service:
+- Secrets + state live in `faucets/` (the `.mac` keys are 0600). They're kept in a
+  named volume here — never bake them into the image or commit them.
+- Minting does STARK proving. For throughput, set `remote_prover_url =
+  "https://tx-prover.devnet.miden.io"` in `faucet.toml` to offload it; otherwise it
+  proves locally (give the host a few cores). Unset = local prover.
+- No built-in auth / rate limit and it mints assets — keep it on an internal
+  network / VPN / authenticated proxy, and use the per-token `max_mint_amount` cap.
+- `SIGTERM` is handled, so `docker stop` / systemd / k8s shut it down gracefully.
+
 ## HTTP API
 
 - `GET /api/tokens` -> `[{ symbol, name, decimals }]`

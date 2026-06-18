@@ -24,7 +24,7 @@ use miden_client::note::{Note, NoteAttachments, NoteDetails, NoteFile, NoteType,
 use miden_client::rpc::Endpoint;
 use miden_client::transaction::{TransactionId, TransactionRequest, TransactionRequestBuilder};
 use miden_client::utils::Serializable;
-use miden_client::{Client, ClientError};
+use miden_client::{Client, ClientError, RemoteTransactionProver};
 use miden_client_sqlite_store::SqliteStore;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
@@ -133,13 +133,16 @@ async fn build_client(
         .map_err(|e| anyhow::anyhow!("invalid rpc endpoint {}: {e}", rpc.endpoint))?;
     let store = Arc::new(SqliteStore::new(PathBuf::from(&token.store_path)).await?);
 
-    let mut client = ClientBuilder::new()
+    let mut builder = ClientBuilder::new()
         .grpc_client(&endpoint, Some(rpc.timeout_ms))
         .authenticator(Arc::new(keystore))
-        .store(store)
-        .build()
-        .await
-        .context("failed to build miden client")?;
+        .store(store);
+    // Offload STARK proving to a remote prover when configured; otherwise the
+    // client proves locally (CPU-heavy).
+    if let Some(url) = &rpc.remote_prover_url {
+        builder = builder.prover(Arc::new(RemoteTransactionProver::new(url.clone())));
+    }
+    let mut client = builder.build().await.context("failed to build miden client")?;
 
     client.ensure_genesis_in_place().await.context("failed to ensure genesis in place")?;
 
