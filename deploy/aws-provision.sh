@@ -2,9 +2,11 @@
 # Provision the EC2 host for the inicio faucet API (run from your laptop).
 #
 # Creates (idempotently): an IAM role + instance profile (Secrets Manager read), a
-# security group (80/443 public, 22 from your IP), an SSH key pair, a small (t3.small)
-# Amazon Linux 2023 instance running deploy/ec2-user-data.sh, and an Elastic IP.
-# The instance builds the image once (swap covers the heavy compile) then runs it light.
+# security group (80/443 public, 22 from your IP), an SSH key pair, an Elastic IP, and a
+# small (t3.small) Amazon Linux 2023 instance running deploy/ec2-user-data.sh. The EIP is
+# allocated first and its <eip>.nip.io host is baked into the user-data so Caddy's cert
+# matches the stable IP. The instance builds the image once (swap covers the heavy compile)
+# then runs it light.
 #
 # Prereqs: `aws` v2 configured (PROFILE), and the 4 secrets uploaded
 # (inicio-faucet/<sym>.mac). Run from the repo root.
@@ -27,13 +29,17 @@ AMI=$(aws ssm get-parameter \
 echo "    $AMI"
 
 echo "==> IAM role + instance profile"
-aws iam create-role --role-name "$NAME-ec2" \
-  --assume-role-policy-document file://deploy/iam-trust-policy.json >/dev/null 2>&1 || true
+if ! aws iam get-role --role-name "$NAME-ec2" >/dev/null 2>&1; then
+  aws iam create-role --role-name "$NAME-ec2" \
+    --assume-role-policy-document file://deploy/iam-trust-policy.json >/dev/null
+fi
 aws iam put-role-policy --role-name "$NAME-ec2" --policy-name secrets \
   --policy-document file://deploy/iam-secrets-policy.json
-aws iam create-instance-profile --instance-profile-name "$NAME-ec2" >/dev/null 2>&1 || true
-aws iam add-role-to-instance-profile --instance-profile-name "$NAME-ec2" \
-  --role-name "$NAME-ec2" >/dev/null 2>&1 || true
+if ! aws iam get-instance-profile --instance-profile-name "$NAME-ec2" >/dev/null 2>&1; then
+  aws iam create-instance-profile --instance-profile-name "$NAME-ec2" >/dev/null
+  aws iam add-role-to-instance-profile --instance-profile-name "$NAME-ec2" \
+    --role-name "$NAME-ec2"
+fi
 
 echo "==> Security group (in the default VPC)"
 VPC=$(aws ec2 describe-vpcs --filters Name=isDefault,Values=true \
@@ -60,23 +66,35 @@ if ! aws ec2 describe-key-pairs --key-names "$KEY_NAME" >/dev/null 2>&1; then
   echo "    wrote $KEY_NAME.pem"
 fi
 
-echo "==> Launch instance"
-sleep 10 # let the new instance profile propagate
+echo "==> Elastic IP (allocate or reuse the one tagged $NAME)"
+ALLOC=$(aws ec2 describe-addresses --filters "Name=tag:Name,Values=$NAME" \
+  --query 'Addresses[0].AllocationId' --output text 2>/dev/null || echo "None")
+if [ "$ALLOC" = "None" ] || [ -z "$ALLOC" ]; then
+  ALLOC=$(aws ec2 allocate-address --domain vpc \
+    --tag-specifications "ResourceType=elastic-ip,Tags=[{Key=Name,Value=$NAME}]" \
+    --query AllocationId --output text)
+fi
+EIP=$(aws ec2 describe-addresses --allocation-ids "$ALLOC" \
+  --query 'Addresses[0].PublicIp' --output text)
+echo "    $EIP ($ALLOC)"
+
+echo "==> Launch instance (FAUCET_HOST=${EIP}.nip.io baked into user-data)"
+UD=$(mktemp)
+awk -v h="export FAUCET_HOST=${EIP}.nip.io" 'NR==1{print; print h; next} {print}' \
+  deploy/ec2-user-data.sh > "$UD"
 IID=$(aws ec2 run-instances --image-id "$AMI" --instance-type "$INSTANCE_TYPE" \
   --key-name "$KEY_NAME" --security-group-ids "$SG" \
   --iam-instance-profile "Name=$NAME-ec2" \
-  --user-data file://deploy/ec2-user-data.sh \
+  --user-data "file://$UD" \
   --block-device-mappings "[{\"DeviceName\":\"/dev/xvda\",\"Ebs\":{\"VolumeSize\":$VOLUME_GB,\"VolumeType\":\"gp3\"}}]" \
   --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=$NAME}]" \
   --query 'Instances[0].InstanceId' --output text)
+rm -f "$UD"
 echo "    $IID — waiting for running"
 aws ec2 wait instance-running --instance-ids "$IID"
 
-echo "==> Elastic IP"
-ALLOC=$(aws ec2 allocate-address --domain vpc --query AllocationId --output text)
+echo "==> Associate Elastic IP"
 aws ec2 associate-address --instance-id "$IID" --allocation-id "$ALLOC" >/dev/null
-EIP=$(aws ec2 describe-addresses --allocation-ids "$ALLOC" \
-  --query 'Addresses[0].PublicIp' --output text)
 
 cat <<DONE
 

@@ -34,6 +34,12 @@ mkdir -p /usr/local/lib/docker/cli-plugins
 curl -fsSL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 \
   -o /usr/local/lib/docker/cli-plugins/docker-compose
 chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+# buildx: AL2023 ships an older one, but `docker compose build` needs >= 0.17.
+BX_VER=$(curl -fsSL https://api.github.com/repos/docker/buildx/releases/latest \
+  | grep -m1 '"tag_name"' | cut -d'"' -f4)
+curl -fsSL "https://github.com/docker/buildx/releases/download/${BX_VER}/buildx-${BX_VER}.linux-amd64" \
+  -o /usr/local/lib/docker/cli-plugins/docker-buildx
+chmod +x /usr/local/lib/docker/cli-plugins/docker-buildx
 
 # --- swap so the heavy one-time Rust build fits on a small (2 GB) instance ---
 # Runtime is light (proving is offloaded to the remote prover); swap is only really
@@ -46,12 +52,18 @@ if ! swapon --show | grep -q /swapfile; then
   echo "/swapfile none swap sw 0 0" >> /etc/fstab
 fi
 
-# --- public hostname for Caddy's cert (<public-ip>.nip.io via IMDSv2) ---
-IMDS_TOKEN=$(curl -fsS -X PUT http://169.254.169.254/latest/api/token \
-  -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
-PUBLIC_IP=$(curl -fsS -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" \
-  http://169.254.169.254/latest/meta-data/public-ipv4)
-export FAUCET_HOST="${PUBLIC_IP}.nip.io"
+# --- public hostname for Caddy's cert ---
+# aws-provision.sh injects `export FAUCET_HOST=<eip>.nip.io` right after the shebang so the
+# cert matches the (stable) Elastic IP regardless of boot-time IP. Fallback: derive from the
+# instance's own public IP via IMDSv2 (only correct if an EIP is already attached at boot).
+if [ -z "${FAUCET_HOST:-}" ]; then
+  IMDS_TOKEN=$(curl -fsS -X PUT http://169.254.169.254/latest/api/token \
+    -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
+  PUBLIC_IP=$(curl -fsS -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" \
+    http://169.254.169.254/latest/meta-data/public-ipv4)
+  FAUCET_HOST="${PUBLIC_IP}.nip.io"
+fi
+export FAUCET_HOST
 
 # --- source ---
 rm -rf "$APP_DIR"
