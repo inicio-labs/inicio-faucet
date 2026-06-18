@@ -34,9 +34,9 @@ mkdir -p /usr/local/lib/docker/cli-plugins
 curl -fsSL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 \
   -o /usr/local/lib/docker/cli-plugins/docker-compose
 chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
-# buildx: AL2023 ships an older one, but `docker compose build` needs >= 0.17.
-BX_VER=$(curl -fsSL https://api.github.com/repos/docker/buildx/releases/latest \
-  | grep -m1 '"tag_name"' | cut -d'"' -f4)
+# buildx: AL2023 ships an older one, but `docker compose build` needs >= 0.17. Pin a known
+# version — an API lookup piped to `grep -m1` trips pipefail via SIGPIPE under `set -e`.
+BX_VER="v0.35.0"
 curl -fsSL "https://github.com/docker/buildx/releases/download/${BX_VER}/buildx-${BX_VER}.linux-amd64" \
   -o /usr/local/lib/docker/cli-plugins/docker-buildx
 chmod +x /usr/local/lib/docker/cli-plugins/docker-buildx
