@@ -2,8 +2,9 @@
 # Provision the EC2 host for the inicio faucet API (run from your laptop).
 #
 # Creates (idempotently): an IAM role + instance profile (Secrets Manager read), a
-# security group (80/443 public, 22 from your IP), an SSH key pair, a t3.large
+# security group (80/443 public, 22 from your IP), an SSH key pair, a small (t3.small)
 # Amazon Linux 2023 instance running deploy/ec2-user-data.sh, and an Elastic IP.
+# The instance builds the image once (swap covers the heavy compile) then runs it light.
 #
 # Prereqs: `aws` v2 configured (PROFILE), and the 4 secrets uploaded
 # (inicio-faucet/<sym>.mac). Run from the repo root.
@@ -12,7 +13,7 @@ set -euo pipefail
 PROFILE="${PROFILE:-inicio-faucet}"
 REGION="${REGION:-us-east-1}"
 NAME="inicio-faucet"
-INSTANCE_TYPE="${INSTANCE_TYPE:-t3.large}"
+INSTANCE_TYPE="${INSTANCE_TYPE:-t3.small}"
 VOLUME_GB="${VOLUME_GB:-30}"
 KEY_NAME="${KEY_NAME:-inicio-faucet-key}"
 aws() { command aws --profile "$PROFILE" --region "$REGION" "$@"; }
@@ -82,7 +83,7 @@ cat <<DONE
 ================================================================
  Instance:  $IID
  Elastic IP: $EIP
- API host:  https://${EIP}.nip.io   (ready ~15 min after boot — the image builds on the box)
+ API host:  https://${EIP}.nip.io   (ready ~25-40 min after boot — small box builds w/ swap)
 ================================================================
  Next:
   1. Set the Amplify app env  FAUCET_API_BASE = https://${EIP}.nip.io  and deploy the frontend.

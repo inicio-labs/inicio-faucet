@@ -35,6 +35,17 @@ curl -fsSL https://github.com/docker/compose/releases/latest/download/docker-com
   -o /usr/local/lib/docker/cli-plugins/docker-compose
 chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
 
+# --- swap so the heavy one-time Rust build fits on a small (2 GB) instance ---
+# Runtime is light (proving is offloaded to the remote prover); swap is only really
+# exercised during the first `docker compose build`.
+if ! swapon --show | grep -q /swapfile; then
+  fallocate -l 8G /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=8192
+  chmod 600 /swapfile
+  mkswap /swapfile
+  swapon /swapfile
+  echo "/swapfile none swap sw 0 0" >> /etc/fstab
+fi
+
 # --- public hostname for Caddy's cert (<public-ip>.nip.io via IMDSv2) ---
 IMDS_TOKEN=$(curl -fsS -X PUT http://169.254.169.254/latest/api/token \
   -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
