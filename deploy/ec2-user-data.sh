@@ -18,7 +18,9 @@ REPO_URL="https://github.com/inicio-labs/inicio-faucet.git"
 APP_DIR="/opt/inicio-faucet"
 ENDPOINT="https://rpc.devnet.miden.io"
 PROVER_URL="https://tx-prover.devnet.miden.io"
-MAX_SUPPLY="100000000000000000"   # 1e9 tokens at 8 decimals
+# Per-request mint cap (base units). 1000 whole tokens at 8 decimals = mitigation for the
+# unauthenticated API; tune as needed. Rate-limiting in Caddy is the recommended fast-follow.
+MAX_MINT="100000000000"
 # Set to the Amplify frontend URL once deployed, e.g. https://faucet.example.com
 # (empty until then; the cross-origin UI won't be allowed until this is set + faucet restarted).
 CORS_ALLOWED_ORIGINS="${CORS_ALLOWED_ORIGINS:-}"
@@ -78,6 +80,7 @@ decimals = $dec
 account_file = "faucets/${lc}.mac"
 store_path = "faucets/${lc}.sqlite3"
 keystore_path = "faucets/${lc}_keystore"
+max_mint_amount = $MAX_MINT
 TOML
   done
 } > faucet.toml
