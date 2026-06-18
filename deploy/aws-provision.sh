@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Provision the EC2 host for the inicio faucet API (run from your laptop).
 #
-# Creates (idempotently): an IAM role + instance profile (Secrets Manager read), a
-# security group (80/443 public, 22 from your IP), an SSH key pair, an Elastic IP, and a
+# Creates (idempotently): an IAM role + instance profile (Secrets Manager read + SSM), a
+# security group (80/443 public; admin via SSM Session Manager, no SSH port), an SSH key
+# pair (kept only for break-glass), an Elastic IP, and a
 # t3.medium Amazon Linux 2023 instance running deploy/ec2-user-data.sh. The EIP is
 # allocated first and its <eip>.nip.io host is baked into the user-data so Caddy's cert
 # matches the stable IP. The instance builds the image once (swap covers the heavy compile)
@@ -35,6 +36,9 @@ if ! aws iam get-role --role-name "$NAME-ec2" >/dev/null 2>&1; then
 fi
 aws iam put-role-policy --role-name "$NAME-ec2" --policy-name secrets \
   --policy-document file://deploy/iam-secrets-policy.json
+# SSM Session Manager for admin access (no open SSH port needed).
+aws iam attach-role-policy --role-name "$NAME-ec2" \
+  --policy-arn arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
 if ! aws iam get-instance-profile --instance-profile-name "$NAME-ec2" >/dev/null 2>&1; then
   aws iam create-instance-profile --instance-profile-name "$NAME-ec2" >/dev/null
   aws iam add-role-to-instance-profile --instance-profile-name "$NAME-ec2" \
@@ -50,13 +54,13 @@ if [ "$SG" = "None" ] || [ -z "$SG" ]; then
   SG=$(aws ec2 create-security-group --group-name "$NAME-sg" \
     --description "inicio faucet" --vpc-id "$VPC" --query GroupId --output text)
 fi
-MYIP=$(curl -fsS https://checkip.amazonaws.com | tr -d '[:space:]')
-for rule in "80/0.0.0.0/0" "443/0.0.0.0/0" "22/${MYIP}/32"; do
+# Only the public faucet ports. Admin is via SSM Session Manager — no SSH port is opened.
+for rule in "80/0.0.0.0/0" "443/0.0.0.0/0"; do
   port=${rule%%/*}; cidr=${rule#*/}
   aws ec2 authorize-security-group-ingress --group-id "$SG" \
     --protocol tcp --port "$port" --cidr "$cidr" >/dev/null 2>&1 || true
 done
-echo "    $SG (80,443 public; 22 from $MYIP)"
+echo "    $SG (80,443 public; admin via SSM, no SSH)"
 
 echo "==> SSH key pair"
 if ! aws ec2 describe-key-pairs --key-names "$KEY_NAME" >/dev/null 2>&1; then
@@ -105,8 +109,8 @@ cat <<DONE
 ================================================================
  Next:
   1. Set the Amplify app env  FAUCET_API_BASE = https://${EIP}.nip.io  and deploy the frontend.
-  2. Once you have the Amplify URL, set the API's CORS to it:
-       ssh -i $KEY_NAME.pem ec2-user@$EIP
+  2. Once you have the Amplify URL, set the API's CORS to it (admin via SSM — no SSH):
+       aws ssm start-session --target $IID    # needs the session-manager-plugin installed locally
        sudo sed -i 's#cors_allowed_origins = \[\]#cors_allowed_origins = ["<amplify-url>"]#' /opt/inicio-faucet/faucet.toml
        cd /opt/inicio-faucet && sudo docker compose restart faucet
   3. Verify:  curl https://${EIP}.nip.io/readyz
