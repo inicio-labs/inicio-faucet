@@ -1,27 +1,26 @@
-# Internal faucet deployment.
+# Internal faucet deployment: faucet API behind Caddy (auto-HTTPS).
 #
-# One-time setup (writes the 4 faucet .mac files into the named volume):
-#   docker compose run --rm faucet create-faucet --symbol TOKA --name "Token A" \
-#       --decimals 8 --max-supply 1000000000000000 --out faucets/toka.mac
-#   ... repeat for TOKB / TOKC / TOKD ...
+# One-time setup: place the 4 faucet .mac files in ./faucets/ next to this file
+# (the EC2 user-data fetches them from Secrets Manager; locally, copy them in or run
+# `create-faucet`). Then put your faucet.toml next to this file (bind = "0.0.0.0:8080",
+# account_file = "faucets/<x>.mac", cors_allowed_origins = ["<frontend-url>"]),
+# export the public host for Caddy's cert, and start:
+#   export FAUCET_HOST=<elastic-ip>.nip.io
+#   docker compose up -d --build
 #
-# Then put your faucet.toml next to this file (bind MUST be "0.0.0.0:8080" for the
-# container, account_file = "faucets/<x>.mac"), and:
-#   docker compose up -d
-#
-# Keep this service on your internal network / behind a VPN or authenticated proxy:
-# it mints assets and has no built-in auth.
+# Caddy is the only public entrypoint (80/443); the faucet is internal-only.
+# It mints assets and has no built-in auth — keep access controlled.
 services:
   faucet:
     build: .
     # In CI, build + push to ghcr.io and pin the image instead of building here:
     # image: ghcr.io/inicio-labs/inicio-faucet:latest
     restart: unless-stopped
-    ports:
-      - "8080:8080"
+    expose:
+      - "8080" # internal to the compose network; reached by Caddy as faucet:8080
     volumes:
       - ./faucet.toml:/app/faucet.toml:ro
-      - faucet-data:/app/faucets
+      - ./faucets:/app/faucets # .mac keys (fetched from Secrets Manager) + sqlite stores
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/readyz"]
       interval: 30s
@@ -29,5 +28,22 @@ services:
       retries: 5
       start_period: 120s
 
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - faucet
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      # The public hostname Caddy gets a cert for (e.g. <elastic-ip>.nip.io).
+      FAUCET_HOST: ${FAUCET_HOST:?set FAUCET_HOST, e.g. export FAUCET_HOST=<elastic-ip>.nip.io}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data # persists issued certs across restarts
+      - caddy-config:/config
+
 volumes:
-  faucet-data:
+  caddy-data:
+  caddy-config:

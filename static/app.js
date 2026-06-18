@@ -12,9 +12,13 @@
 
   const state = { tokens: {}, token: null, cleared: false, busy: false };
 
+  // API base: set window.FAUCET_API_BASE (via config.js) when the frontend is hosted
+  // on a different origin than the API (e.g. Amplify). Empty = same-origin.
+  const API_BASE = (window.FAUCET_API_BASE || "").replace(/\/$/, "");
+
   async function loadTokens() {
     try {
-      const res = await fetch("/api/tokens");
+      const res = await fetch(API_BASE + "/api/tokens");
       if (!res.ok) throw new Error("HTTP " + res.status);
       const tokens = await res.json();
       gridEl.innerHTML = "";
@@ -69,7 +73,7 @@
     showHead("pending", "Minting " + state.token + "…");
     showBody("Submitting the transaction to the network. This can take a few seconds.");
     try {
-      const res = await fetch("/api/mint", {
+      const res = await fetch(API_BASE + "/api/mint", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({

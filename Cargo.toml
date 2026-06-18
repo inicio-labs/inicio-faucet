@@ -15,7 +15,7 @@ miden-client-sqlite-store = "0.15"
 tokio = { version = "1.40", features = ["rt", "rt-multi-thread", "macros", "sync", "time", "signal"] }
 tokio-util = { version = "0.7", default-features = false, features = ["rt"] }
 axum = { version = "0.8", features = ["json"] }
-tower-http = { version = "0.6", features = ["fs"] }
+tower-http = { version = "0.6", features = ["fs", "cors"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 toml = "0.8"

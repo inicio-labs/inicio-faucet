@@ -1,0 +1,9 @@
+# Caddy fronts the faucet with automatic HTTPS.
+#
+# FAUCET_HOST is injected at boot by the EC2 user-data (e.g. "<elastic-ip>.nip.io"),
+# passed through docker-compose into Caddy's environment. nip.io resolves
+# <ip>.nip.io to that IP, so Caddy can obtain a real Let's Encrypt cert with no
+# domain of our own. Reverse-proxies to the faucet container on its internal :8080.
+{$FAUCET_HOST} {
+	reverse_proxy faucet:8080
+}

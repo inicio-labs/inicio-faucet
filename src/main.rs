@@ -117,7 +117,7 @@ async fn serve(config_path: &str) -> Result<()> {
     tracing::info!(count = config.tokens.len(), "all faucet workers ready");
 
     let state = AppState { tokens: Arc::new(tokens), senders: Arc::new(senders) };
-    let app = http::router(state, &config.server.static_dir);
+    let app = http::router(state, &config.server.static_dir, &config.server.cors_allowed_origins);
 
     let listener = tokio::net::TcpListener::bind(&config.server.bind)
         .await

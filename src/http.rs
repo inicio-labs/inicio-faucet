@@ -7,12 +7,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::State;
-use axum::http::StatusCode;
+use axum::http::{header, HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, oneshot};
+use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 
 use crate::mint::{parse_address, parse_note_type, MintJob, MintOutcome};
@@ -41,14 +42,29 @@ pub struct AppState {
 }
 
 /// Build the router: JSON API + health/readiness + static frontend fallback.
-pub fn router(state: AppState, static_dir: &str) -> Router {
+pub fn router(state: AppState, static_dir: &str, cors_origins: &[String]) -> Router {
     Router::new()
         .route("/api/tokens", get(list_tokens))
         .route("/api/mint", post(mint))
         .route("/health", get(health))
         .route("/readyz", get(readyz))
         .fallback_service(ServeDir::new(static_dir))
+        .layer(cors_layer(cors_origins))
         .with_state(state)
+}
+
+/// CORS for cross-origin frontends (e.g. the Amplify-hosted UI calling this API).
+/// Empty `origins` adds no allowed origins — same-origin requests are unaffected.
+fn cors_layer(origins: &[String]) -> CorsLayer {
+    let layer = CorsLayer::new()
+        .allow_methods([Method::GET, Method::POST])
+        .allow_headers([header::CONTENT_TYPE]);
+    let parsed: Vec<HeaderValue> = origins.iter().filter_map(|o| o.parse().ok()).collect();
+    if parsed.is_empty() {
+        layer
+    } else {
+        layer.allow_origin(parsed)
+    }
 }
 
 async fn list_tokens(State(state): State<AppState>) -> Json<Vec<TokenMeta>> {

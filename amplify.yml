@@ -1,0 +1,16 @@
+version: 1
+frontend:
+  phases:
+    preBuild:
+      commands:
+        # Inject the API origin (set FAUCET_API_BASE in the Amplify app's env vars,
+        # e.g. https://<elastic-ip>.nip.io) into the static config the UI reads.
+        - echo "window.FAUCET_API_BASE='${FAUCET_API_BASE}';" > static/config.js
+    build:
+      commands: []
+  artifacts:
+    baseDirectory: static
+    files:
+      - "**/*"
+  cache:
+    paths: []

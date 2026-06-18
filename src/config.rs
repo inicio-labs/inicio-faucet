@@ -36,6 +36,11 @@ pub struct ServerConfig {
     /// Directory served for the static frontend (index.html, game, assets).
     #[serde(default = "default_static_dir")]
     pub static_dir: String,
+    /// Browser origins allowed to call the API (CORS). Needed when the frontend is
+    /// hosted on a different origin (e.g. Amplify) than the API. Empty = no
+    /// cross-origin access (same-origin only), which is fine for the bundled UI.
+    #[serde(default)]
+    pub cors_allowed_origins: Vec<String>,
 }
 
 /// One faucet account, imported from a `.mac` produced by `create-faucet`.

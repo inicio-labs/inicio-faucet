@@ -1,76 +1,89 @@
 #!/usr/bin/env bash
-# EC2 user-data bootstrap for the inicio faucet (Amazon Linux 2023).
+# EC2 user-data bootstrap for the inicio faucet API (Amazon Linux 2023).
 #
-# Stands the faucet up on boot: installs Docker, pulls the signing keys (.mac) from
-# AWS Secrets Manager, writes faucet.toml, and runs the container. State (sqlite +
-# keys) lives under $DATA; the keys are re-fetched from Secrets Manager on every
-# boot, so a replaced instance comes back as the SAME faucet accounts.
+# Builds the faucet image on the instance, fetches the signing keys (.mac) from AWS
+# Secrets Manager, writes faucet.toml + a host for Caddy, and runs faucet + Caddy via
+# docker compose. Caddy gets auto-HTTPS for <public-ip>.nip.io. State (sqlite) lives in
+# $APP_DIR/faucets; keys are re-fetched from Secrets Manager on every boot, so a
+# replaced instance returns as the SAME faucet accounts.
 #
-# Prerequisites (one-time, done locally — see README "Run on EC2"):
-#   * the 4 faucet .mac files stored as binary secrets named  inicio-faucet/<sym>.mac
-#   * the instance's IAM role granting  secretsmanager:GetSecretValue  on those
-#   * a security group allowing 8080 only from your VPN / internal CIDRs
-#   * the ghcr image published (public, or add a docker login below)
+# Prereqs (see README "Run on EC2"): the 4 .mac stored as binary secrets named
+# inicio-faucet/<sym>.mac; the instance's IAM role granting secretsmanager:GetSecretValue;
+# a security group allowing 80 + 443 (and 22 from your IP). The frontend is hosted on
+# Amplify separately; set CORS_ALLOWED_ORIGINS to its URL once known (then re-run / restart).
 set -euo pipefail
 
-IMAGE="${IMAGE:-ghcr.io/inicio-labs/inicio-faucet:latest}"   # pin a :vX.Y.Z in prod
-DATA="${DATA:-/opt/faucet}"
 REGION="${AWS_REGION:-us-east-1}"
-APP_UID=10001                                                # the image's non-root user
-TOKENS=("TOKA:Token A:8" "TOKB:Token B:8" "TOKC:Token C:8" "TOKD:Token D:8")
+REPO_URL="https://github.com/inicio-labs/inicio-faucet.git"
+APP_DIR="/opt/inicio-faucet"
+ENDPOINT="https://rpc.devnet.miden.io"
+PROVER_URL="https://tx-prover.devnet.miden.io"
+MAX_SUPPLY="100000000000000000"   # 1e9 tokens at 8 decimals
+# Set to the Amplify frontend URL once deployed, e.g. https://faucet.example.com
+# (empty until then; the cross-origin UI won't be allowed until this is set + faucet restarted).
+CORS_ALLOWED_ORIGINS="${CORS_ALLOWED_ORIGINS:-}"
+# "SYMBOL:Name:decimals" per token.
+TOKENS=("IMIDEN:Inicio Miden:8" "IETH:Inicio ETH:8" "IBTC:Inicio BTC:8" "IUSDT:Inicio USDT:8")
 
-# --- Docker (Amazon Linux 2023; Ubuntu: apt-get install -y docker.io) ---
-dnf -y install docker
+# --- Docker + compose plugin + git ---
+dnf -y install docker git
 systemctl enable --now docker
+mkdir -p /usr/local/lib/docker/cli-plugins
+curl -fsSL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 \
+  -o /usr/local/lib/docker/cli-plugins/docker-compose
+chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
 
-mkdir -p "$DATA/faucets"
+# --- public hostname for Caddy's cert (<public-ip>.nip.io via IMDSv2) ---
+IMDS_TOKEN=$(curl -fsS -X PUT http://169.254.169.254/latest/api/token \
+  -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
+PUBLIC_IP=$(curl -fsS -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" \
+  http://169.254.169.254/latest/meta-data/public-ipv4)
+export FAUCET_HOST="${PUBLIC_IP}.nip.io"
 
-# --- faucet.toml (config; not secret) ---
+# --- source ---
+rm -rf "$APP_DIR"
+git clone --depth 1 "$REPO_URL" "$APP_DIR"
+cd "$APP_DIR"
+mkdir -p faucets
+
+# --- signing keys (.mac) from Secrets Manager + faucet.toml ---
+cors_toml="[]"
+if [ -n "$CORS_ALLOWED_ORIGINS" ]; then cors_toml="[\"$CORS_ALLOWED_ORIGINS\"]"; fi
 {
   cat <<TOML
 [rpc]
-endpoint = "https://rpc.devnet.miden.io"
-timeout_ms = 10000
-remote_prover_url = "https://tx-prover.devnet.miden.io"
+endpoint = "$ENDPOINT"
+timeout_ms = 30000
+remote_prover_url = "$PROVER_URL"
 
 [server]
 bind = "0.0.0.0:8080"
 max_batch_size = 256
 static_dir = "static"
+cors_allowed_origins = $cors_toml
 TOML
   for t in "${TOKENS[@]}"; do
     sym=${t%%:*}; rest=${t#*:}; name=${rest%%:*}; dec=${rest##*:}
     lc=$(echo "$sym" | tr 'A-Z' 'a-z')
+    aws secretsmanager get-secret-value --region "$REGION" \
+        --secret-id "inicio-faucet/${lc}.mac" --query SecretBinary --output text \
+      | base64 -d > "faucets/${lc}.mac"
+    chmod 600 "faucets/${lc}.mac"
     cat <<TOML
 
 [[tokens]]
 symbol = "$sym"
 name = "$name"
 decimals = $dec
-account_file = "faucets/$lc.mac"
-store_path = "faucets/$lc.sqlite3"
+account_file = "faucets/${lc}.mac"
+store_path = "faucets/${lc}.sqlite3"
 keystore_path = "faucets/${lc}_keystore"
 TOML
   done
-} > "$DATA/faucet.toml"
+} > faucet.toml
 
-# --- signing keys (.mac) from Secrets Manager ---
-for t in "${TOKENS[@]}"; do
-  sym=${t%%:*}; lc=$(echo "$sym" | tr 'A-Z' 'a-z')
-  aws secretsmanager get-secret-value --region "$REGION" \
-      --secret-id "inicio-faucet/${lc}.mac" --query SecretBinary --output text \
-    | base64 -d > "$DATA/faucets/${lc}.mac"
-  chmod 600 "$DATA/faucets/${lc}.mac"
-done
+# the container runs as uid 10001 (the image's user) and must own the data dir.
+chown -R 10001:10001 faucets
 
-# The container runs as uid $APP_UID; it must own the data dir to read keys + write stores.
-chown -R "$APP_UID:$APP_UID" "$DATA/faucets"
-
-# --- run (if the ghcr package is private, docker login ghcr.io first) ---
-docker pull "$IMAGE"
-docker rm -f faucet 2>/dev/null || true
-docker run -d --name faucet --restart unless-stopped \
-  -p 8080:8080 \
-  -v "$DATA/faucet.toml:/app/faucet.toml:ro" \
-  -v "$DATA/faucets:/app/faucets" \
-  "$IMAGE"
+# --- build + run (faucet + Caddy) ---
+FAUCET_HOST="$FAUCET_HOST" docker compose up -d --build
