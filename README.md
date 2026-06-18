@@ -81,6 +81,38 @@ Operational notes specific to this service:
   network / VPN / authenticated proxy, and use the per-token `max_mint_amount` cap.
 - `SIGTERM` is handled, so `docker stop` / systemd / k8s shut it down gracefully.
 
+### Run on EC2 (single instance)
+
+One `t3.small`/`t3.medium` is the right host: the faucet is single-writer per account
+(no horizontal scaling), stateful, and internal — no orchestrator needed. With the
+remote prover on, it barely uses CPU. [`deploy/ec2-user-data.sh`](deploy/ec2-user-data.sh)
+bootstraps it on boot.
+
+One-time setup (local):
+
+```
+# 1. Create the faucets and upload each .mac as a binary secret:
+for t in toka tokb tokc tokd; do
+  cargo run --release -- create-faucet --symbol "${t^^}" --decimals 8 \
+      --max-supply 1000000000000000 --out "./faucets/$t.mac"
+  aws secretsmanager create-secret --name "inicio-faucet/$t.mac" \
+      --secret-binary "fileb://./faucets/$t.mac"
+done
+# 2. Publish the image: git tag v0.1.0 && git push --tags  (CI pushes to ghcr).
+```
+
+Then launch an Amazon Linux 2023 instance with:
+- an **IAM role** allowing `secretsmanager:GetSecretValue` on `inicio-faucet/*`,
+- a **security group** exposing 8080 only to your VPN / internal CIDRs (it has no auth),
+- `deploy/ec2-user-data.sh` pasted as **user data**.
+
+The script installs Docker, re-fetches the `.mac` keys from Secrets Manager (so a
+replaced instance returns as the *same* faucet accounts), writes `faucet.toml`
+(devnet + remote prover), and runs the container. The sqlite stores are disposable
+(re-synced from chain); the keys-in-Secrets-Manager are what you must not lose, so
+they're the source of truth rather than the instance disk. Put `/opt/faucet/faucets`
+on a snapshotted EBS volume if you also want to avoid re-syncing on every replace.
+
 ## HTTP API
 
 - `GET /api/tokens` -> `[{ symbol, name, decimals }]`
