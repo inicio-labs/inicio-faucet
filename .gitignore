@@ -4,3 +4,6 @@ faucet.toml
 /faucets/*.sqlite3*
 /faucets/*_keystore/
 .note-transport.pid
+# SSH private keys (e.g. inicio-faucet-key.pem) and local env files — never commit
+*.pem
+.env
