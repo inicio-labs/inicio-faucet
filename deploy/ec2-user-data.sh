@@ -112,4 +112,7 @@ TOML
 chown -R 10001:10001 faucets
 
 # --- build + run (faucet + Caddy) ---
-FAUCET_HOST="$FAUCET_HOST" docker compose up -d --build
+# Persist FAUCET_HOST to .env so later `docker compose` ops (restart, logs) work without
+# having to re-export it (compose auto-loads .env from the project dir).
+echo "FAUCET_HOST=$FAUCET_HOST" > .env
+docker compose up -d --build
