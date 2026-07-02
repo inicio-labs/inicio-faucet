@@ -46,8 +46,9 @@
     for (const c of gridEl.children) c.classList && c.classList.toggle("selected", c.dataset.sym === sym);
     const t = state.tokens[sym];
     if (t) {
-      const one = Math.pow(10, t.decimals).toLocaleString("en-US");
-      hintEl.textContent = "Amount in base units · " + t.symbol + " has " + t.decimals + " decimals (1 " + t.symbol + " = " + one + ").";
+      const cap = t.max_amount ? Math.floor(t.max_amount / Math.pow(10, t.decimals)) : null;
+      hintEl.textContent = "Amount in whole " + t.symbol +
+        (cap ? " · max " + cap.toLocaleString("en-US") + " per mint" : "") + ".";
     }
     refresh();
   }
@@ -73,13 +74,16 @@
     showHead("pending", "Minting " + state.token + "…");
     showBody("Submitting the transaction to the network. This can take a few seconds.");
     try {
+      // The amount field is in whole tokens; the API expects base units.
+      const t = state.tokens[state.token];
+      const amount = Number(BigInt(Math.trunc(Number(amtEl.value))) * 10n ** BigInt(t.decimals));
       const res = await fetch(API_BASE + "/api/mint", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           token: state.token,
           address: addrEl.value.trim(),
-          amount: Math.trunc(Number(amtEl.value)),
+          amount: amount,
           note_type: noteType,
         }),
       });

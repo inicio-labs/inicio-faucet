@@ -1,6 +1,6 @@
 # inicio-faucet
 
-Internal-only faucet service for the Miden devnet. Mints test tokens (P2ID notes)
+Internal-only faucet service for the Miden testnet. Mints test tokens (P2ID notes)
 to wallet addresses so the team can exercise the wallet and the nProtocol DEX.
 
 Four tokens, each backed by its own public fungible faucet account. A user enters an
@@ -75,7 +75,7 @@ Operational notes specific to this service:
 - Secrets + state live in `faucets/` (the `.mac` keys are 0600). They're kept in a
   named volume here — never bake them into the image or commit them.
 - Minting does STARK proving. For throughput, set `remote_prover_url =
-  "https://tx-prover.devnet.miden.io"` in `faucet.toml` to offload it; otherwise it
+  "https://tx-prover.testnet.miden.io"` in `faucet.toml` to offload it; otherwise it
   proves locally (give the host a few cores). Unset = local prover.
 - No built-in auth / rate limit and it mints assets — keep it on an internal
   network / VPN / authenticated proxy, and use the per-token `max_mint_amount` cap.
@@ -102,16 +102,14 @@ done
 ```
 
 Then launch an Amazon Linux 2023 instance with:
-- an **IAM role** allowing `secretsmanager:GetSecretValue` on `inicio-faucet/*`,
-- a **security group** exposing 8080 only to your VPN / internal CIDRs (it has no auth),
-- `deploy/ec2-user-data.sh` pasted as **user data**.
+- an **IAM role** with `AmazonSSMManagedInstanceCore` for admin access (no SSH port needed),
+- a **security group** exposing 80/443 (Caddy) — the faucet has no auth, so gate access accordingly,
+- `deploy/ec2-user-data.sh` pasted as **user data** (`deploy/aws-provision.sh` automates all of this).
 
-The script installs Docker, re-fetches the `.mac` keys from Secrets Manager (so a
-replaced instance returns as the *same* faucet accounts), writes `faucet.toml`
-(devnet + remote prover), and runs the container. The sqlite stores are disposable
-(re-synced from chain); the keys-in-Secrets-Manager are what you must not lose, so
-they're the source of truth rather than the instance disk. Put `/opt/faucet/faucets`
-on a snapshotted EBS volume if you also want to avoid re-syncing on every replace.
+The script installs Docker + buildx, builds the image, **generates the four `.mac` keys on the box**
+(testnet keys are low-value, so no Secrets Manager), writes `faucet.toml` (testnet + remote prover),
+and runs faucet + Caddy. Keys + sqlite stores live in `/opt/inicio-faucet/faucets` on the instance's
+EBS; replacing the instance yields new faucet accounts (new IDs) — acceptable for testnet.
 
 ## HTTP API
 
@@ -126,7 +124,7 @@ on a snapshotted EBS volume if you also want to avoid re-syncing on every replac
 
 `.github/workflows/faucet-healthcheck.yml` is a scheduled synthetic monitor (every
 6 hours, plus manual `workflow_dispatch`). Each run builds the service, starts it
-against the configured node (devnet by default), mints a real note, and asserts the
+against the configured node (testnet by default), mints a real note, and asserts the
 response carries a `tx_id`/`note_id` — i.e. that execute → prove → submit → apply all succeeded on
 chain. A failure (mint broken / node unreachable) fails the run and notifies
 watchers; the faucet log is uploaded as an artifact.
@@ -143,8 +141,8 @@ When the faucet is deployed behind a URL, a lighter black-box variant can simply
 ## Dependencies
 
 The miden crates use the crates.io `miden-client = "0.15"` release, which speaks
-the 0.15 protocol the devnet node at `rpc.devnet.miden.io` runs — so the client
-handshakes cleanly and minted notes are compatible with the wallet/DEX on devnet.
+the 0.15 protocol the testnet node at `rpc.testnet.miden.io` runs — so the client
+handshakes cleanly and minted notes are compatible with the wallet/DEX on testnet.
 All types come from `miden-client` re-exports. To target a different node, set the
 `endpoint` in `faucet.toml` and bump `miden-client`/`miden-client-sqlite-store` to the
 version that node runs.

@@ -1,16 +1,15 @@
 #!/usr/bin/env bash
 # Provision the EC2 host for the inicio faucet API (run from your laptop).
 #
-# Creates (idempotently): an IAM role + instance profile (Secrets Manager read + SSM), a
+# Creates (idempotently): an IAM role + instance profile (SSM admin only), a
 # security group (80/443 public; admin via SSM Session Manager, no SSH port), an SSH key
 # pair (kept only for break-glass), an Elastic IP, and a
 # t3.medium Amazon Linux 2023 instance running deploy/ec2-user-data.sh. The EIP is
 # allocated first and its <eip>.nip.io host is baked into the user-data so Caddy's cert
 # matches the stable IP. The instance builds the image once (swap covers the heavy compile)
-# then runs it light.
+# then runs it light; it GENERATES the faucet keys on the box (no Secrets Manager).
 #
-# Prereqs: `aws` v2 configured (PROFILE), and the 4 secrets uploaded
-# (inicio-faucet/<sym>.mac). Run from the repo root.
+# Prereqs: `aws` v2 configured (PROFILE). Run from the repo root.
 set -euo pipefail
 
 PROFILE="${PROFILE:-inicio-faucet}"
@@ -34,9 +33,8 @@ if ! aws iam get-role --role-name "$NAME-ec2" >/dev/null 2>&1; then
   aws iam create-role --role-name "$NAME-ec2" \
     --assume-role-policy-document file://deploy/iam-trust-policy.json >/dev/null
 fi
-aws iam put-role-policy --role-name "$NAME-ec2" --policy-name secrets \
-  --policy-document file://deploy/iam-secrets-policy.json
-# SSM Session Manager for admin access (no open SSH port needed).
+# SSM Session Manager for admin access (no open SSH port needed). No Secrets Manager —
+# testnet faucet keys are generated on the instance, not fetched.
 aws iam attach-role-policy --role-name "$NAME-ec2" \
   --policy-arn arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
 if ! aws iam get-instance-profile --instance-profile-name "$NAME-ec2" >/dev/null 2>&1; then

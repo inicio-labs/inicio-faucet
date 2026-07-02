@@ -8,12 +8,12 @@
 # (repeat for TOKB / TOKC / TOKD), then reference them below.
 
 [rpc]
-# Miden node gRPC endpoint. Devnet runs the 0.15 protocol this client speaks.
-endpoint = "https://rpc.devnet.miden.io"
+# Miden node gRPC endpoint. Testnet runs the 0.15 protocol this client speaks.
+endpoint = "https://rpc.testnet.miden.io"
 timeout_ms = 10000
 # Optional: offload STARK proving to a remote prover (much less CPU on this host).
 # Omit to prove locally.
-# remote_prover_url = "https://tx-prover.devnet.miden.io"
+# remote_prover_url = "https://tx-prover.testnet.miden.io"
 
 [server]
 bind = "127.0.0.1:8080"

@@ -1,33 +1,29 @@
 #!/usr/bin/env bash
 # EC2 user-data bootstrap for the inicio faucet API (Amazon Linux 2023).
 #
-# Builds the faucet image on the instance, fetches the signing keys (.mac) from AWS
-# Secrets Manager, writes faucet.toml + a host for Caddy, and runs faucet + Caddy via
-# docker compose. Caddy gets auto-HTTPS for <public-ip>.nip.io. State (sqlite) lives in
-# $APP_DIR/faucets; keys are re-fetched from Secrets Manager on every boot, so a
-# replaced instance returns as the SAME faucet accounts.
+# Builds the faucet image on the instance, GENERATES the 4 faucet signing keys (.mac) locally on
+# the box (no Secrets Manager — testnet keys are low-value), writes faucet.toml + a host for Caddy,
+# and runs faucet + Caddy via docker compose. Caddy gets auto-HTTPS for <public-ip>.nip.io.
+# State (sqlite) + keys live in $APP_DIR/faucets on the instance's EBS. Keys are generated on first
+# boot and kept if present; replacing the instance yields NEW faucet accounts (new IDs) — fine for testnet.
 #
-# Prereqs (see README "Run on EC2"): the 4 .mac stored as binary secrets named
-# inicio-faucet/<sym>.mac; the instance's IAM role granting secretsmanager:GetSecretValue;
-# a security group allowing 80 + 443 (and 22 from your IP). The frontend is hosted on
-# Amplify separately; set CORS_ALLOWED_ORIGINS to its URL once known (then re-run / restart).
+# Prereqs: a security group allowing 80 + 443; SSM for admin (no SSH port). The frontend is hosted
+# on Amplify separately; aws-provision.sh injects CORS_ALLOWED_ORIGINS so the cross-origin UI is allowed.
 set -euo pipefail
 
-REGION="${AWS_REGION:-us-east-1}"
 REPO_URL="https://github.com/inicio-labs/inicio-faucet.git"
 APP_DIR="/opt/inicio-faucet"
-ENDPOINT="https://rpc.devnet.miden.io"
-PROVER_URL="https://tx-prover.devnet.miden.io"
-# Per-request mint cap (base units). 1000 whole tokens at 8 decimals = mitigation for the
-# unauthenticated API; tune as needed. Rate-limiting in Caddy is the recommended fast-follow.
-MAX_MINT="100000000000"
-# Set to the Amplify frontend URL once deployed, e.g. https://faucet.example.com
-# (empty until then; the cross-origin UI won't be allowed until this is set + faucet restarted).
+ENDPOINT="https://rpc.testnet.miden.io"
+PROVER_URL="https://tx-prover.testnet.miden.io"
+MAX_SUPPLY="100000000000000000"   # faucet max supply: 1e9 whole tokens at 8 decimals
+# Per-request mint cap (base units): 1,000,000 whole tokens at 8 decimals.
+MAX_MINT="100000000000000"
+# Amplify frontend origin(s) for CORS (aws-provision.sh injects this). Empty = none allowed.
 CORS_ALLOWED_ORIGINS="${CORS_ALLOWED_ORIGINS:-}"
 # "SYMBOL:Name:decimals" per token.
 TOKENS=("IMIDEN:Inicio Miden:8" "IETH:Inicio ETH:8" "IBTC:Inicio BTC:8" "IUSDT:Inicio USDT:8")
 
-# --- Docker + compose plugin + git ---
+# --- Docker + compose plugin + buildx + git ---
 dnf -y install docker git
 systemctl enable --now docker
 mkdir -p /usr/local/lib/docker/cli-plugins
@@ -41,9 +37,7 @@ curl -fsSL "https://github.com/docker/buildx/releases/download/${BX_VER}/buildx-
   -o /usr/local/lib/docker/cli-plugins/docker-buildx
 chmod +x /usr/local/lib/docker/cli-plugins/docker-buildx
 
-# --- swap so the heavy one-time Rust build fits on a small (2 GB) instance ---
-# Runtime is light (proving is offloaded to the remote prover); swap is only really
-# exercised during the first `docker compose build`.
+# --- swap so the heavy one-time Rust build fits on a small instance ---
 if ! swapon --show | grep -q /swapfile; then
   fallocate -l 8G /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=8192
   chmod 600 /swapfile
@@ -53,9 +47,8 @@ if ! swapon --show | grep -q /swapfile; then
 fi
 
 # --- public hostname for Caddy's cert ---
-# aws-provision.sh injects `export FAUCET_HOST=<eip>.nip.io` right after the shebang so the
-# cert matches the (stable) Elastic IP regardless of boot-time IP. Fallback: derive from the
-# instance's own public IP via IMDSv2 (only correct if an EIP is already attached at boot).
+# aws-provision.sh injects `export FAUCET_HOST=<eip>.nip.io` right after the shebang so the cert
+# matches the (stable) Elastic IP regardless of boot-time IP. Fallback: derive from IMDSv2.
 if [ -z "${FAUCET_HOST:-}" ]; then
   IMDS_TOKEN=$(curl -fsS -X PUT http://169.254.169.254/latest/api/token \
     -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
@@ -70,8 +63,11 @@ rm -rf "$APP_DIR"
 git clone --depth 1 "$REPO_URL" "$APP_DIR"
 cd "$APP_DIR"
 mkdir -p faucets
+chown 10001:10001 faucets   # so the uid-10001 container can write keys/stores here
+# .env so every `docker compose` invocation gets FAUCET_HOST (build / run / up).
+echo "FAUCET_HOST=$FAUCET_HOST" > .env
 
-# --- signing keys (.mac) from Secrets Manager + faucet.toml ---
+# --- faucet.toml ---
 cors_toml="[]"
 if [ -n "$CORS_ALLOWED_ORIGINS" ]; then cors_toml="[\"$CORS_ALLOWED_ORIGINS\"]"; fi
 {
@@ -90,10 +86,6 @@ TOML
   for t in "${TOKENS[@]}"; do
     sym=${t%%:*}; rest=${t#*:}; name=${rest%%:*}; dec=${rest##*:}
     lc=$(echo "$sym" | tr 'A-Z' 'a-z')
-    aws secretsmanager get-secret-value --region "$REGION" \
-        --secret-id "inicio-faucet/${lc}.mac" --query SecretBinary --output text \
-      | base64 -d > "faucets/${lc}.mac"
-    chmod 600 "faucets/${lc}.mac"
     cat <<TOML
 
 [[tokens]]
@@ -108,11 +100,18 @@ TOML
   done
 } > faucet.toml
 
-# the container runs as uid 10001 (the image's user) and must own the data dir.
+# --- build the image, then generate any missing faucet .mac on the box (no Secrets Manager) ---
+docker compose build
+for t in "${TOKENS[@]}"; do
+  sym=${t%%:*}; rest=${t#*:}; name=${rest%%:*}; dec=${rest##*:}
+  lc=$(echo "$sym" | tr 'A-Z' 'a-z')
+  if [ ! -f "faucets/${lc}.mac" ]; then
+    docker compose run --rm --no-deps -T faucet \
+      create-faucet --symbol "$sym" --name "$name" --decimals "$dec" \
+      --max-supply "$MAX_SUPPLY" --out "faucets/${lc}.mac"
+  fi
+done
 chown -R 10001:10001 faucets
 
-# --- build + run (faucet + Caddy) ---
-# Persist FAUCET_HOST to .env so later `docker compose` ops (restart, logs) work without
-# having to re-export it (compose auto-loads .env from the project dir).
-echo "FAUCET_HOST=$FAUCET_HOST" > .env
-docker compose up -d --build
+# --- run (faucet + Caddy) ---
+docker compose up -d
