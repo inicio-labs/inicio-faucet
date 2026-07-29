@@ -10,7 +10,13 @@
   const statusEl = document.getElementById("game-status");
   const resultEl = document.getElementById("result");
 
-  const state = { tokens: {}, token: null, cleared: false, busy: false };
+  const state = { tokens: {}, token: null, cleared: false, busy: false, cooldownUntil: 0 };
+
+  // Post-mint cooldown — UX polish only (briefly locks the button; not abuse protection,
+  // since the API is public). Real limits belong server/edge-side.
+  const COOLDOWN_MS = 30000;
+  const COOLDOWN_KEY = "faucet_cooldown_until";
+  let cooldownTimer = null;
 
   // API base: set window.FAUCET_API_BASE (via config.js) when the frontend is hosted
   // on a different origin than the API (e.g. Amplify). Empty = same-origin.
@@ -54,9 +60,31 @@
   }
 
   function refresh() {
-    const ok = state.cleared && !state.busy && !!state.token && addrEl.value.trim().length > 0 && Number(amtEl.value) > 0;
+    const onCooldown = Date.now() < state.cooldownUntil;
+    const ok = state.cleared && !state.busy && !onCooldown && !!state.token && addrEl.value.trim().length > 0 && Number(amtEl.value) > 0;
     pubBtn.disabled = !ok;
     privBtn.disabled = !ok;
+  }
+
+  function startCooldown(until) {
+    state.cooldownUntil = until;
+    try { localStorage.setItem(COOLDOWN_KEY, String(until)); } catch (e) {}
+    if (cooldownTimer) clearInterval(cooldownTimer);
+    tickCooldown();
+    cooldownTimer = setInterval(tickCooldown, 500);
+    refresh();
+  }
+  function tickCooldown() {
+    const remain = Math.ceil((state.cooldownUntil - Date.now()) / 1000);
+    if (remain > 0) {
+      if (statusEl) { statusEl.textContent = "— cooldown " + remain + "s"; statusEl.style.color = ""; }
+    } else {
+      state.cooldownUntil = 0;
+      if (cooldownTimer) { clearInterval(cooldownTimer); cooldownTimer = null; }
+      try { localStorage.removeItem(COOLDOWN_KEY); } catch (e) {}
+      if (statusEl && state.cleared) { statusEl.textContent = "— ready to mint"; statusEl.style.color = "#ff5500"; }
+      refresh();
+    }
   }
 
   document.addEventListener("faucet:cleared", () => {
@@ -93,6 +121,7 @@
         showBody(escapeHtml(text), true);
       } else {
         renderSuccess(noteType, JSON.parse(text));
+        startCooldown(Date.now() + COOLDOWN_MS);
       }
     } catch (e) {
       showHead("err", "Request error");
@@ -147,6 +176,12 @@
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   }
+
+  // restore an in-progress cooldown across reloads (so a refresh doesn't bypass it)
+  try {
+    const saved = Number(localStorage.getItem(COOLDOWN_KEY) || 0);
+    if (saved > Date.now()) startCooldown(saved);
+  } catch (e) {}
 
   loadTokens();
   refresh();
