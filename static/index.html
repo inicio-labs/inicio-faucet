@@ -18,8 +18,12 @@
 
     <main class="main-content">
       <div class="form-group">
-        <label for="recipient-address" class="form-label">Recipient address</label>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+          <label for="recipient-address" class="form-label">Recipient address</label>
+          <button type="button" id="connect-wallet" style="font:inherit;font-size:.82rem;font-weight:600;cursor:pointer;border:1px solid #ff5500;color:#ff5500;background:transparent;border-radius:8px;padding:5px 13px;">Connect Bread wallet</button>
+        </div>
         <input type="text" id="recipient-address" class="form-input" placeholder="mtst1… or 0x… account id" autocomplete="off" spellcheck="false" />
+        <div class="token-amount-hint" id="wallet-status"></div>
       </div>
 
       <div class="form-group">
@@ -81,6 +85,7 @@
   </footer>
 
   <script src="/config.js"></script>
+  <script src="/wallet.js"></script>
   <script src="/game.js"></script>
   <script src="/app.js"></script>
 </body>

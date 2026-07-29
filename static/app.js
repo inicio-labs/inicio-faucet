@@ -95,6 +95,39 @@
 
   [addrEl, amtEl].forEach((el) => el.addEventListener("input", refresh));
 
+  // --- Bread wallet connect → auto-fill the recipient address ---
+  const connectBtn = document.getElementById("connect-wallet");
+  const walletStatusEl = document.getElementById("wallet-status");
+  function setWalletStatus(msg, color) {
+    if (walletStatusEl) { walletStatusEl.textContent = msg || ""; walletStatusEl.style.color = color || ""; }
+  }
+  if (connectBtn) {
+    connectBtn.addEventListener("click", async () => {
+      const W = window.MidenFaucetWallet;
+      if (!W || !W.isInstalled()) {
+        setWalletStatus("Bread wallet not detected — opening the install page…", "");
+        window.open((W && W.installUrl) || "https://chromewebstore.google.com/", "_blank", "noopener");
+        return;
+      }
+      const prev = connectBtn.textContent;
+      connectBtn.disabled = true;
+      connectBtn.textContent = "Connecting…";
+      setWalletStatus("", "");
+      try {
+        const addr = await W.connect();
+        addrEl.value = addr;
+        addrEl.dispatchEvent(new Event("input")); // triggers refresh() + button gating
+        connectBtn.textContent = "Wallet connected";
+        setWalletStatus("Connected · " + addr.slice(0, 12) + "…" + addr.slice(-6), "#ff5500");
+      } catch (e) {
+        connectBtn.textContent = prev;
+        setWalletStatus("Could not connect: " + ((e && e.message) || e), "");
+      } finally {
+        connectBtn.disabled = false;
+      }
+    });
+  }
+
   async function mint(noteType) {
     if (state.busy || pubBtn.disabled) return;
     state.busy = true;
