@@ -18,11 +18,14 @@
 
     <main class="main-content">
       <div class="form-group">
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
-          <label for="recipient-address" class="form-label">Recipient address</label>
-          <button type="button" id="connect-wallet" style="font:inherit;font-size:.82rem;font-weight:600;cursor:pointer;border:1px solid #ff5500;color:#ff5500;background:transparent;border-radius:8px;padding:5px 13px;">Connect Bread wallet</button>
+        <label for="recipient-address" class="form-label">Recipient address</label>
+        <div style="display:flex;align-items:stretch;gap:8px;">
+          <input type="text" id="recipient-address" class="form-input" style="flex:1;min-width:0;" placeholder="mtst1… or 0x… account id" autocomplete="off" spellcheck="false" />
+          <button type="button" id="connect-wallet" title="Connect Bread wallet" aria-label="Connect Bread wallet"
+            style="flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;width:54px;cursor:pointer;border:1px solid #e3e1db;background:#fff;border-radius:12px;color:#ff5500;transition:border-color .15s,color .15s;">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 7V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-1"/><path d="M21 12h-6a2 2 0 0 0 0 4h6a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1Z"/><path d="M17 14h.01"/></svg>
+          </button>
         </div>
-        <input type="text" id="recipient-address" class="form-input" placeholder="mtst1… or 0x… account id" autocomplete="off" spellcheck="false" />
         <div class="token-amount-hint" id="wallet-status"></div>
       </div>
 

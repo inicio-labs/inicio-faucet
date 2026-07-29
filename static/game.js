@@ -63,6 +63,15 @@
     raf = requestAnimationFrame(loop);
   }
 
+  // After a mint, app.js fires this so the player must clear the game again before the next mint.
+  document.addEventListener("faucet:reset", function () {
+    cancelAnimationFrame(raf);
+    state = "idle";
+    reset();
+    if (overlay) overlay.classList.remove("hidden");
+    if (startBtn) startBtn.textContent = "Play again to unlock the next mint";
+  });
+
   function gameOver() {
     state = "over";
     if (startBtn) {

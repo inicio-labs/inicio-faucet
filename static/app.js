@@ -10,13 +10,7 @@
   const statusEl = document.getElementById("game-status");
   const resultEl = document.getElementById("result");
 
-  const state = { tokens: {}, token: null, cleared: false, busy: false, cooldownUntil: 0 };
-
-  // Post-mint cooldown — UX polish only (briefly locks the button; not abuse protection,
-  // since the API is public). Real limits belong server/edge-side.
-  const COOLDOWN_MS = 30000;
-  const COOLDOWN_KEY = "faucet_cooldown_until";
-  let cooldownTimer = null;
+  const state = { tokens: {}, token: null, cleared: false, busy: false };
 
   // API base: set window.FAUCET_API_BASE (via config.js) when the frontend is hosted
   // on a different origin than the API (e.g. Amplify). Empty = same-origin.
@@ -60,31 +54,9 @@
   }
 
   function refresh() {
-    const onCooldown = Date.now() < state.cooldownUntil;
-    const ok = state.cleared && !state.busy && !onCooldown && !!state.token && addrEl.value.trim().length > 0 && Number(amtEl.value) > 0;
+    const ok = state.cleared && !state.busy && !!state.token && addrEl.value.trim().length > 0 && Number(amtEl.value) > 0;
     pubBtn.disabled = !ok;
     privBtn.disabled = !ok;
-  }
-
-  function startCooldown(until) {
-    state.cooldownUntil = until;
-    try { localStorage.setItem(COOLDOWN_KEY, String(until)); } catch (e) {}
-    if (cooldownTimer) clearInterval(cooldownTimer);
-    tickCooldown();
-    cooldownTimer = setInterval(tickCooldown, 500);
-    refresh();
-  }
-  function tickCooldown() {
-    const remain = Math.ceil((state.cooldownUntil - Date.now()) / 1000);
-    if (remain > 0) {
-      if (statusEl) { statusEl.textContent = "— cooldown " + remain + "s"; statusEl.style.color = ""; }
-    } else {
-      state.cooldownUntil = 0;
-      if (cooldownTimer) { clearInterval(cooldownTimer); cooldownTimer = null; }
-      try { localStorage.removeItem(COOLDOWN_KEY); } catch (e) {}
-      if (statusEl && state.cleared) { statusEl.textContent = "— ready to mint"; statusEl.style.color = "#ff5500"; }
-      refresh();
-    }
   }
 
   document.addEventListener("faucet:cleared", () => {
@@ -109,18 +81,19 @@
         window.open((W && W.installUrl) || "https://chromewebstore.google.com/", "_blank", "noopener");
         return;
       }
-      const prev = connectBtn.textContent;
       connectBtn.disabled = true;
-      connectBtn.textContent = "Connecting…";
-      setWalletStatus("", "");
+      connectBtn.title = "Connecting…";
+      setWalletStatus("Connecting…", "");
       try {
         const addr = await W.connect();
         addrEl.value = addr;
         addrEl.dispatchEvent(new Event("input")); // triggers refresh() + button gating
-        connectBtn.textContent = "Wallet connected";
-        setWalletStatus("Connected · " + addr.slice(0, 12) + "…" + addr.slice(-6), "#ff5500");
+        connectBtn.title = "Wallet connected";
+        connectBtn.style.borderColor = "#2b8a3e";
+        connectBtn.style.color = "#2b8a3e";
+        setWalletStatus("Connected · " + addr.slice(0, 12) + "…" + addr.slice(-6), "#2b8a3e");
       } catch (e) {
-        connectBtn.textContent = prev;
+        connectBtn.title = "Connect Bread wallet";
         setWalletStatus("Could not connect: " + ((e && e.message) || e), "");
       } finally {
         connectBtn.disabled = false;
@@ -154,7 +127,10 @@
         showBody(escapeHtml(text), true);
       } else {
         renderSuccess(noteType, JSON.parse(text));
-        startCooldown(Date.now() + COOLDOWN_MS);
+        // Require the game to be cleared again before the next mint.
+        state.cleared = false;
+        document.dispatchEvent(new Event("faucet:reset"));
+        if (statusEl) { statusEl.textContent = "— play again to mint the next one"; statusEl.style.color = ""; }
       }
     } catch (e) {
       showHead("err", "Request error");
@@ -209,12 +185,6 @@
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   }
-
-  // restore an in-progress cooldown across reloads (so a refresh doesn't bypass it)
-  try {
-    const saved = Number(localStorage.getItem(COOLDOWN_KEY) || 0);
-    if (saved > Date.now()) startCooldown(saved);
-  } catch (e) {}
 
   loadTokens();
   refresh();
