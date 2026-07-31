@@ -22,6 +22,11 @@ pub struct RpcConfig {
     /// When unset, transactions are proved locally (CPU-heavy).
     #[serde(default)]
     pub remote_prover_url: Option<String>,
+    /// How many times to try the remote prover before falling back to LOCAL proving.
+    /// The public testnet prover flakes (intermittent timeouts); local is the guaranteed
+    /// (but slower) backstop. Ignored when `remote_prover_url` is unset.
+    #[serde(default = "default_remote_prover_attempts")]
+    pub remote_prover_attempts: u32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -64,6 +69,10 @@ pub struct TokenConfig {
 
 fn default_max_batch_size() -> usize {
     256
+}
+
+fn default_remote_prover_attempts() -> u32 {
+    3
 }
 
 fn default_static_dir() -> String {

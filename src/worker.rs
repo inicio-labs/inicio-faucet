@@ -22,7 +22,10 @@ use miden_client::builder::ClientBuilder;
 use miden_client::keystore::{FilesystemKeyStore, Keystore};
 use miden_client::note::{Note, NoteAttachments, NoteDetails, NoteFile, NoteType, P2idNote};
 use miden_client::rpc::Endpoint;
-use miden_client::transaction::{TransactionId, TransactionRequest, TransactionRequestBuilder};
+use miden_client::transaction::{
+    LocalTransactionProver, ProvingOptions, TransactionId, TransactionProver, TransactionRequest,
+    TransactionRequestBuilder,
+};
 use miden_client::utils::Serializable;
 use miden_client::{Client, ClientError, RemoteTransactionProver};
 use miden_client_sqlite_store::SqliteStore;
@@ -72,7 +75,7 @@ async fn worker_loop(params: WorkerParams) {
     let WorkerParams { rpc, token, mut rx, cancel, ready, max_batch } = params;
     let symbol = token.symbol.clone();
 
-    let (mut client, faucet_id) = match build_client(&rpc, &token).await {
+    let (mut client, faucet_id, provers) = match build_client(&rpc, &token).await {
         Ok(v) => {
             let _ = ready.send(Ok(()));
             v
@@ -103,7 +106,7 @@ async fn worker_loop(params: WorkerParams) {
                 if n == 0 {
                     break; // channel closed
                 }
-                process_batch(&mut client, faucet_id, &symbol, std::mem::take(&mut buffer)).await;
+                process_batch(&mut client, faucet_id, &symbol, std::mem::take(&mut buffer), &provers).await;
             }
         }
     }
@@ -114,7 +117,7 @@ async fn worker_loop(params: WorkerParams) {
 async fn build_client(
     rpc: &RpcConfig,
     token: &TokenConfig,
-) -> Result<(Client<FilesystemKeyStore>, AccountId)> {
+) -> Result<(Client<FilesystemKeyStore>, AccountId, Provers)> {
     let keystore = FilesystemKeyStore::new(PathBuf::from(&token.keystore_path))
         .map_err(|e| anyhow::anyhow!("failed to create keystore: {e}"))?;
 
@@ -133,16 +136,21 @@ async fn build_client(
         .map_err(|e| anyhow::anyhow!("invalid rpc endpoint {}: {e}", rpc.endpoint))?;
     let store = Arc::new(SqliteStore::new(PathBuf::from(&token.store_path)).await?);
 
-    let mut builder = ClientBuilder::new()
+    let builder = ClientBuilder::new()
         .grpc_client(&endpoint, Some(rpc.timeout_ms))
         .authenticator(Arc::new(keystore))
         .store(store);
-    // Offload STARK proving to a remote prover when configured; otherwise the
-    // client proves locally (CPU-heavy).
-    if let Some(url) = &rpc.remote_prover_url {
-        builder = builder.prover(Arc::new(RemoteTransactionProver::new(url.clone())));
-    }
     let mut client = builder.build().await.context("failed to build miden client")?;
+
+    // Proving: remote first (when configured), local fallback. We call `prove_transaction_with`
+    // explicitly per transaction, so we don't set a default prover on the client builder.
+    let provers = Provers {
+        remote: rpc.remote_prover_url.as_ref().map(|url| {
+            Arc::new(RemoteTransactionProver::new(url.clone())) as Arc<dyn TransactionProver>
+        }),
+        local: Arc::new(LocalTransactionProver::new(ProvingOptions::default())),
+        remote_attempts: rpc.remote_prover_attempts.max(1),
+    };
 
     client.ensure_genesis_in_place().await.context("failed to ensure genesis in place")?;
 
@@ -175,55 +183,66 @@ async fn build_client(
         let deploy = TransactionRequestBuilder::new()
             .build()
             .map_err(|e| anyhow::anyhow!("failed to build deploy transaction: {e}"))?;
-        submit_batch(&mut client, account_id, deploy)
+        submit_batch(&mut client, account_id, deploy, &provers)
             .await
             .context("failed to deploy faucet account")?;
     } else {
         tracing::info!(token = %token.symbol, faucet = %account_id, "loaded existing on-chain faucet account");
     }
 
-    Ok((client, account_id))
+    Ok((client, account_id, provers))
 }
 
-/// Execute → prove → submit → apply a transaction, returning its id and the block
-/// height at which it was committed.
-/// Execute → prove → submit → apply, retrying transient PROVING failures. The public testnet
-/// prover (tx-prover.testnet.miden.io) intermittently times out ("failed to prove transaction:
-/// Timeout expired"); a single timeout would otherwise fail the whole mint. Proving happens
-/// BEFORE submit, so re-executing on a proving error is safe — nothing landed on-chain yet — so
-/// we only retry `TransactionProvingError` (never submit/apply errors, which could double-spend).
+/// Proving strategy for a worker: try the remote prover up to `remote_attempts` times, then fall
+/// back to LOCAL proving. The public testnet prover flakes (intermittent "Timeout expired"); local
+/// is the guaranteed (slower) backstop. Proving is BEFORE submit, so trying multiple provers is
+/// safe — nothing lands on-chain until `submit_proven_transaction`.
+struct Provers {
+    remote: Option<Arc<dyn TransactionProver>>,
+    local: Arc<dyn TransactionProver>,
+    remote_attempts: u32,
+}
+
+/// Execute → prove (remote, with local fallback) → submit → apply, returning the tx id and the
+/// block height at which it committed.
 async fn submit_batch(
     client: &mut Client<FilesystemKeyStore>,
     faucet_id: AccountId,
     request: TransactionRequest,
-) -> Result<(TransactionId, BlockNumber), ClientError> {
-    const MAX_ATTEMPTS: u32 = 4;
-    let mut attempt: u32 = 0;
-    loop {
-        attempt += 1;
-        match submit_batch_once(client, faucet_id, request.clone()).await {
-            Ok(v) => return Ok(v),
-            Err(e)
-                if attempt < MAX_ATTEMPTS
-                    && matches!(e, ClientError::TransactionProvingError(_)) =>
-            {
-                tracing::warn!(attempt, error = %e, "proving failed (transient), resyncing and retrying");
-                tokio::time::sleep(std::time::Duration::from_millis(1000 * u64::from(attempt))).await;
-                let _ = client.sync_state().await;
-            }
-            Err(e) => return Err(e),
-        }
-    }
-}
-
-async fn submit_batch_once(
-    client: &mut Client<FilesystemKeyStore>,
-    faucet_id: AccountId,
-    request: TransactionRequest,
+    provers: &Provers,
 ) -> Result<(TransactionId, BlockNumber), ClientError> {
     let tx_result = client.execute_transaction(faucet_id, request).await?;
     let tx_id = tx_result.executed_transaction().id();
-    let proven = client.prove_transaction(&tx_result).await?;
+
+    // Prove the SAME executed transaction: remote first (fast when healthy), local as fallback.
+    let mut proven = None;
+    if let Some(remote) = &provers.remote {
+        for attempt in 1..=provers.remote_attempts {
+            match client.prove_transaction_with(&tx_result, remote.clone()).await {
+                Ok(p) => {
+                    proven = Some(p);
+                    break;
+                }
+                Err(e @ ClientError::TransactionProvingError(_)) => {
+                    tracing::warn!(attempt, max = provers.remote_attempts, error = %e, "remote proving failed");
+                    if attempt < provers.remote_attempts {
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    }
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+    let proven = match proven {
+        Some(p) => p,
+        None => {
+            if provers.remote.is_some() {
+                tracing::warn!("remote prover exhausted — falling back to LOCAL proving");
+            }
+            client.prove_transaction_with(&tx_result, provers.local.clone()).await?
+        }
+    };
+
     let height = client.submit_proven_transaction(proven, &tx_result).await?;
     client.apply_transaction(&tx_result, height).await?;
     Ok((tx_id, height))
@@ -236,6 +255,7 @@ async fn process_batch(
     faucet_id: AccountId,
     symbol: &str,
     batch: Vec<MintJob>,
+    provers: &Provers,
 ) {
     // Sync before building the transaction so the reference block and the faucet's
     // nonce are current — if a previous transaction failed to land, our local
@@ -290,7 +310,7 @@ async fn process_batch(
     };
 
     tracing::info!(token = %symbol, batch = count, "minting batch");
-    match submit_batch(client, faucet_id, request).await {
+    match submit_batch(client, faucet_id, request, provers).await {
         Ok((tx_id, height)) => {
             let tx_hex = tx_id.to_hex();
             for (job, note) in pending {
