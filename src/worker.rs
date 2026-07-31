@@ -24,7 +24,7 @@ use miden_client::note::{Note, NoteAttachments, NoteDetails, NoteFile, NoteType,
 use miden_client::rpc::Endpoint;
 use miden_client::transaction::{
     LocalTransactionProver, ProvingOptions, TransactionId, TransactionProver, TransactionRequest,
-    TransactionRequestBuilder,
+    TransactionRequestBuilder, TransactionResult,
 };
 use miden_client::utils::Serializable;
 use miden_client::{Client, ClientError, RemoteTransactionProver};
@@ -203,6 +203,34 @@ struct Provers {
     remote_attempts: u32,
 }
 
+/// Execute a transaction, retrying transient RPC errors. Execution is BEFORE submit (nothing has
+/// landed on-chain yet), so re-running is safe — a transient node blip on execute won't fail the mint.
+async fn execute_with_retry(
+    client: &mut Client<FilesystemKeyStore>,
+    faucet_id: AccountId,
+    request: &TransactionRequest,
+) -> Result<TransactionResult, ClientError> {
+    const ATTEMPTS: u32 = 3;
+    let mut last_err = None;
+    for attempt in 1..=ATTEMPTS {
+        match client.execute_transaction(faucet_id, request.clone()).await {
+            Ok(t) => return Ok(t),
+            Err(e) => {
+                if !matches!(e, ClientError::RpcError(_)) {
+                    return Err(e);
+                }
+                tracing::warn!(attempt, max = ATTEMPTS, error = %e, "execute failed (transient RPC), resyncing and retrying");
+                last_err = Some(e);
+                if attempt < ATTEMPTS {
+                    tokio::time::sleep(std::time::Duration::from_millis(500 * u64::from(attempt))).await;
+                    let _ = client.sync_state().await;
+                }
+            }
+        }
+    }
+    Err(last_err.expect("loop runs at least once"))
+}
+
 /// Execute → prove (remote, with local fallback) → submit → apply, returning the tx id and the
 /// block height at which it committed.
 async fn submit_batch(
@@ -211,7 +239,7 @@ async fn submit_batch(
     request: TransactionRequest,
     provers: &Provers,
 ) -> Result<(TransactionId, BlockNumber), ClientError> {
-    let tx_result = client.execute_transaction(faucet_id, request).await?;
+    let tx_result = execute_with_retry(client, faucet_id, &request).await?;
     let tx_id = tx_result.executed_transaction().id();
 
     // Prove the SAME executed transaction: remote first (fast when healthy), local as fallback.

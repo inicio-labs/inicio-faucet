@@ -111,9 +111,22 @@ async fn mint(State(state): State<AppState>, Json(req): Json<MintRequest>) -> Re
 
     let (reply_tx, reply_rx) = oneshot::channel();
     let job = MintJob { target, amount: req.amount, note_type, reply: reply_tx };
-    if sender.send(job).await.is_err() {
-        return (StatusCode::SERVICE_UNAVAILABLE, "faucet worker unavailable".to_string())
-            .into_response();
+    // Fail fast under overload instead of hanging: `try_send` returns immediately. The channel is
+    // bounded, so when it's saturated the caller gets a clear 503 to retry, rather than queuing
+    // behind a long backlog (and we don't pile up unbounded awaiting request tasks).
+    match sender.try_send(job) {
+        Ok(()) => {}
+        Err(mpsc::error::TrySendError::Full(_)) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "faucet is busy — please retry in a moment".to_string(),
+            )
+                .into_response();
+        }
+        Err(mpsc::error::TrySendError::Closed(_)) => {
+            return (StatusCode::SERVICE_UNAVAILABLE, "faucet worker unavailable".to_string())
+                .into_response();
+        }
     }
 
     match tokio::time::timeout(MINT_TIMEOUT, reply_rx).await {
