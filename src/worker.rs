@@ -187,7 +187,36 @@ async fn build_client(
 
 /// Execute → prove → submit → apply a transaction, returning its id and the block
 /// height at which it was committed.
+/// Execute → prove → submit → apply, retrying transient PROVING failures. The public testnet
+/// prover (tx-prover.testnet.miden.io) intermittently times out ("failed to prove transaction:
+/// Timeout expired"); a single timeout would otherwise fail the whole mint. Proving happens
+/// BEFORE submit, so re-executing on a proving error is safe — nothing landed on-chain yet — so
+/// we only retry `TransactionProvingError` (never submit/apply errors, which could double-spend).
 async fn submit_batch(
+    client: &mut Client<FilesystemKeyStore>,
+    faucet_id: AccountId,
+    request: TransactionRequest,
+) -> Result<(TransactionId, BlockNumber), ClientError> {
+    const MAX_ATTEMPTS: u32 = 4;
+    let mut attempt: u32 = 0;
+    loop {
+        attempt += 1;
+        match submit_batch_once(client, faucet_id, request.clone()).await {
+            Ok(v) => return Ok(v),
+            Err(e)
+                if attempt < MAX_ATTEMPTS
+                    && matches!(e, ClientError::TransactionProvingError(_)) =>
+            {
+                tracing::warn!(attempt, error = %e, "proving failed (transient), resyncing and retrying");
+                tokio::time::sleep(std::time::Duration::from_millis(1000 * u64::from(attempt))).await;
+                let _ = client.sync_state().await;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+async fn submit_batch_once(
     client: &mut Client<FilesystemKeyStore>,
     faucet_id: AccountId,
     request: TransactionRequest,
