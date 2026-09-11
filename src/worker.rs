@@ -20,7 +20,7 @@ use miden_client::asset::FungibleAsset;
 use miden_client::block::BlockNumber;
 use miden_client::builder::ClientBuilder;
 use miden_client::keystore::{FilesystemKeyStore, Keystore};
-use miden_client::note::{Note, NoteAttachments, NoteDetails, NoteFile, NoteType, P2idNote};
+use miden_client::note::{Note, NoteDetails, NoteFile, NoteType, P2idNote};
 use miden_client::rpc::{Endpoint, GrpcError, RpcError};
 use miden_client::transaction::{
     LocalTransactionProver, ProvingOptions, TransactionId, TransactionProver, TransactionRequest,
@@ -354,15 +354,15 @@ async fn process_batch(
                 continue;
             }
         };
-        let note = match P2idNote::create(
-            faucet_id,
-            job.target,
-            vec![asset.into()],
-            job.note_type,
-            NoteAttachments::default(),
-            client.rng(),
-        ) {
-            Ok(note) => note,
+        let note: Note = match P2idNote::builder()
+            .sender(faucet_id)
+            .target(job.target)
+            .asset(asset)
+            .note_type(job.note_type)
+            .generate_serial_number(client.rng())
+            .build()
+        {
+            Ok(note) => note.into(),
             Err(e) => {
                 let _ = job.reply.send(Err(format!("failed to build note: {e}")));
                 continue;
@@ -396,12 +396,14 @@ async fn process_batch(
                 let note_b64 = if matches!(job.note_type, NoteType::Private) {
                     let details =
                         NoteDetails::new(note.assets().clone(), note.recipient().clone());
-                    // `after_block_num` hints the recipient's wallet when the note becomes
-                    // consumable — the block this mint was committed in.
-                    let file = NoteFile::NoteDetails {
+                    // The sync hint tells the recipient's wallet from which block (and under
+                    // which tag) to look for the note — the height this mint was submitted at.
+                    let file = NoteFile::ExpectedNote {
                         details,
-                        after_block_num: height,
-                        tag: Some(note.metadata().tag()),
+                        sync_hint: miden_client::note::NoteSyncHint::new(
+                            height,
+                            note.metadata().tag(),
+                        ),
                     };
                     Some(BASE64_STANDARD.encode(file.to_bytes()))
                 } else {
