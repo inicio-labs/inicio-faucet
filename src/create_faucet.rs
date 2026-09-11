@@ -2,18 +2,18 @@
 //! its `.mac` (`AccountFile`). Pure construction — no network. The faucet is
 //! deployed on-chain automatically by the service's first mint.
 //!
-//! Uses the crates.io miden-client 0.15 faucet model (`create_fungible_faucet` +
-//! `TokenPolicyManager`), matching the deployed public-testnet faucet.
+//! Uses the crates.io miden-client 0.16 faucet model
+//! (`create_singlesig_user_fungible_faucet` + `TokenPolicyManager`).
 
 use anyhow::{Context, Result};
 use clap::Args;
 use miden_client::account::component::{
-    create_fungible_faucet, AccessControl, AuthScheme, BurnPolicyConfig, FungibleFaucet,
-    MintPolicyConfig, PolicyRegistration, TokenName, TokenPolicyManager,
+    create_singlesig_user_fungible_faucet, AuthSingleSig, BurnPolicy, FungibleFaucet, MintPolicy,
+    TokenName, TokenPolicyManager,
 };
 use miden_client::account::{AccountFile, AccountType};
 use miden_client::asset::{AssetAmount, TokenSymbol};
-use miden_client::auth::{AuthMethod, AuthSecretKey};
+use miden_client::auth::AuthSecretKey;
 use miden_client::crypto::rpo_falcon512::SecretKey;
 
 #[derive(Debug, Args)]
@@ -53,26 +53,23 @@ pub fn run(args: &CreateFaucetArgs) -> Result<()> {
 
     // Falcon512 single-sig auth.
     let secret = SecretKey::new();
-    let auth_method = AuthMethod::SingleSig {
-        approver: (secret.public_key().to_commitment().into(), AuthScheme::Falcon512Poseidon2),
-    };
+    let auth = AuthSingleSig::falcon512_poseidon2(secret.public_key());
 
     // AllowAll mint/burn policies only. No send/receive transfer policies: those
-    // enable asset callbacks, which require a callback-aware custom mint script —
-    // the standard `own_output_notes` mint path can't satisfy them.
-    let policies = TokenPolicyManager::new()
-        .with_mint_policy(MintPolicyConfig::AllowAll, PolicyRegistration::Active)
-        .map_err(|e| anyhow::anyhow!("mint policy: {e}"))?
-        .with_burn_policy(BurnPolicyConfig::AllowAll, PolicyRegistration::Active)
-        .map_err(|e| anyhow::anyhow!("burn policy: {e}"))?;
+    // enable asset callbacks (and flip the account ID's callback flag), which
+    // require a callback-aware custom mint script — the standard
+    // `own_output_notes` mint path can't satisfy them.
+    let policies = TokenPolicyManager::builder()
+        .active_mint_policy(MintPolicy::allow_all())
+        .active_burn_policy(BurnPolicy::allow_all())
+        .build();
 
-    let account = create_fungible_faucet(
+    let account = create_singlesig_user_fungible_faucet(
         rand::random(),
         faucet,
-        AccountType::Public,
-        auth_method,
-        AccessControl::AuthControlled,
+        auth,
         policies,
+        AccountType::Public,
     )
     .map_err(|e| anyhow::anyhow!("failed to create faucet account: {e}"))?;
 
