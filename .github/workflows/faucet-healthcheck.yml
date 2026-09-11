@@ -40,8 +40,10 @@ jobs:
       - name: Provision test faucet
         id: faucet
         env:
-          # Optional: base64 of a .mac to reuse one persistent test faucet across runs.
-          # If unset, a throwaway faucet is created each run.
+          # Base64 of a .mac to reuse one persistent test faucet across runs. On a
+          # fee-charging chain (testnet 0.16+) this must be a faucet that has been funded
+          # with native MIDEN and deployed: a throwaway faucet (created when this is unset)
+          # can't pay its own deployment fee, so its mints are answered with 503.
           FAUCET_MAC_B64: ${{ secrets.FAUCET_MAC_B64 }}
         run: |
           set -euo pipefail

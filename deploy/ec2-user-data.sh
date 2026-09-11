@@ -115,3 +115,8 @@ chown -R 10001:10001 faucets
 
 # --- run (faucet + Caddy) ---
 docker compose up -d
+
+# Testnet charges fees in native MIDEN, paid from each faucet's vault, so a new faucet can only
+# deploy once some MIDEN is sent to its address (printed by create-faucet above, and logged by the
+# service as "not deployed yet ... send some to <address>"). Until then its mints return 503.
+echo "Fund each new faucet with native MIDEN; addresses: docker compose logs faucet | grep 'not deployed yet'"
