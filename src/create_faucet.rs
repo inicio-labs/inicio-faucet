@@ -1,6 +1,8 @@
 //! `create-faucet` subcommand: build a PUBLIC fungible faucet account and write
-//! its `.mac` (`AccountFile`). Pure construction — no network. The faucet is
-//! deployed on-chain automatically by the service's first mint.
+//! its `.mac` (`AccountFile`). Pure construction — no network. The service
+//! deploys the faucet on-chain when it starts; on a fee-charging chain it first
+//! needs some of the chain's native asset (MIDEN) sent to its address to pay the
+//! deployment fee.
 //!
 //! Uses the crates.io miden-client 0.16 faucet model
 //! (`create_singlesig_user_fungible_faucet` + `TokenPolicyManager`).
@@ -12,6 +14,7 @@ use miden_client::account::component::{
     TokenName, TokenPolicyManager,
 };
 use miden_client::account::{AccountFile, AccountType};
+use miden_client::address::NetworkId;
 use miden_client::asset::{AssetAmount, TokenSymbol};
 use miden_client::auth::AuthSecretKey;
 use miden_client::crypto::rpo_falcon512::SecretKey;
@@ -32,9 +35,18 @@ pub struct CreateFaucetArgs {
     /// Output path for the `.mac` AccountFile.
     #[arg(long)]
     pub out: String,
+    /// Network whose address format to print: `testnet`, `devnet` or `mainnet`.
+    #[arg(long, default_value = "testnet")]
+    pub network: String,
 }
 
 pub fn run(args: &CreateFaucetArgs) -> Result<()> {
+    let network = match args.network.as_str() {
+        "testnet" => NetworkId::Testnet,
+        "devnet" => NetworkId::Devnet,
+        "mainnet" => NetworkId::Mainnet,
+        other => anyhow::bail!("unknown network {other:?} (expected testnet, devnet or mainnet)"),
+    };
     let symbol = TokenSymbol::try_from(args.symbol.as_str())
         .map_err(|e| anyhow::anyhow!("invalid token symbol {:?}: {e}", args.symbol))?;
     let name_str = if args.name.is_empty() { args.symbol.as_str() } else { args.name.as_str() };
@@ -91,9 +103,12 @@ pub fn run(args: &CreateFaucetArgs) -> Result<()> {
     println!("  symbol:     {}", args.symbol);
     println!("  decimals:   {}", args.decimals);
     println!("  account id: {account_id}");
+    println!("  address:    {}", account_id.to_bech32(network));
     println!("  written to: {}", args.out);
     println!();
     println!("Add a [[tokens]] entry to faucet.toml referencing this .mac, with its own");
-    println!("store_path and keystore_path. The faucet deploys on-chain on its first mint.");
+    println!("store_path and keystore_path. On a fee-charging chain, send the address some");
+    println!("native MIDEN (the fee asset) before starting: the service deploys the faucet by");
+    println!("consuming that note, and answers mints for it with 503 until it arrives.");
     Ok(())
 }

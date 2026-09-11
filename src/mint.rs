@@ -15,8 +15,18 @@ pub struct MintJob {
     pub target: AccountId,
     pub amount: u64,
     pub note_type: NoteType,
-    /// Worker replies here with the outcome (or an error string).
-    pub reply: oneshot::Sender<Result<MintOutcome, String>>,
+    /// Worker replies here with the outcome (or why it couldn't mint).
+    pub reply: oneshot::Sender<Result<MintOutcome, MintError>>,
+}
+
+/// Why a mint request wasn't served, so the HTTP layer can pick the status code.
+#[derive(Debug)]
+pub enum MintError {
+    /// The faucet can't mint right now but will once the condition clears (e.g. it is
+    /// waiting for fee funding): the caller should retry later (503).
+    Unavailable(String),
+    /// The mint itself failed (502).
+    Failed(String),
 }
 
 /// What we hand back to the user after a successful mint.

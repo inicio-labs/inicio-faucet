@@ -131,7 +131,11 @@ async fn mint(State(state): State<AppState>, Json(req): Json<MintRequest>) -> Re
 
     match tokio::time::timeout(MINT_TIMEOUT, reply_rx).await {
         Ok(Ok(Ok(outcome))) => (StatusCode::OK, Json::<MintOutcome>(outcome)).into_response(),
-        Ok(Ok(Err(e))) => (StatusCode::BAD_GATEWAY, e).into_response(),
+        // e.g. the faucet is waiting for fee funding — temporary, the caller should retry later.
+        Ok(Ok(Err(crate::mint::MintError::Unavailable(e)))) => {
+            (StatusCode::SERVICE_UNAVAILABLE, e).into_response()
+        }
+        Ok(Ok(Err(crate::mint::MintError::Failed(e)))) => (StatusCode::BAD_GATEWAY, e).into_response(),
         Ok(Err(_)) => {
             (StatusCode::BAD_GATEWAY, "no response from faucet worker".to_string()).into_response()
         }
