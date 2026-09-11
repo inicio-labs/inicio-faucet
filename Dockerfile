@@ -1,7 +1,8 @@
 # syntax=docker/dockerfile:1
 
 # ---- build stage ----
-FROM rust:1-bookworm AS builder
+# Pinned: miden-client 0.16 needs Rust 1.98.1 or newer.
+FROM rust:1.98.1-bookworm AS builder
 WORKDIR /src
 COPY . .
 # Heavy first build (miden deps). For faster rebuilds, introduce cargo-chef to

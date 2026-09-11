@@ -6,9 +6,14 @@
 #   inicio-faucet create-faucet --symbol TOKA --name "Token A" --decimals 8 \
 #       --max-supply 1000000000000 --out ./faucets/toka.mac
 # (repeat for TOKB / TOKC / TOKD), then reference them below.
+#
+# Testnet charges transaction fees in native MIDEN, paid from each faucet's own
+# vault. Before the first start, send some MIDEN (e.g. from the official testnet
+# faucet) to each address `create-faucet` prints: the service deploys a faucet by
+# consuming that note, and answers mints for it with 503 until it arrives.
 
 [rpc]
-# Miden node gRPC endpoint. Testnet runs the 0.15 protocol this client speaks.
+# Miden node gRPC endpoint. Testnet runs the 0.16 protocol this client speaks.
 endpoint = "https://rpc.testnet.miden.io"
 timeout_ms = 10000
 # Optional: offload STARK proving to a remote prover (much less CPU on this host).
