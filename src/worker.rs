@@ -21,7 +21,7 @@ use miden_client::block::BlockNumber;
 use miden_client::builder::ClientBuilder;
 use miden_client::keystore::{FilesystemKeyStore, Keystore};
 use miden_client::note::{Note, NoteAttachments, NoteDetails, NoteFile, NoteType, P2idNote};
-use miden_client::rpc::Endpoint;
+use miden_client::rpc::{Endpoint, GrpcError, RpcError};
 use miden_client::transaction::{
     LocalTransactionProver, ProvingOptions, TransactionId, TransactionProver, TransactionRequest,
     TransactionRequestBuilder, TransactionResult,
@@ -232,48 +232,99 @@ async fn execute_with_retry(
 }
 
 /// Execute → prove (remote, with local fallback) → submit → apply, returning the tx id and the
-/// block height at which it committed.
+/// block height reported at submission.
+///
+/// Retries the whole execute→prove→submit on a mempool-head conflict. Under load, consecutive mints
+/// for one faucet chain through the node's mempool: tx N+1's initial account commitment must match the
+/// mempool head (tx N's output), not the last committed block. If tx N is still in-flight when we
+/// build tx N+1 against the just-synced committed state, the node rejects it with an
+/// `AccountCommitmentMismatch`, surfaced as a gRPC `InvalidArgument` (see [`is_mempool_state_conflict`]).
+/// That rejection is definitive — nothing landed on-chain — so we wait ~1 block for the in-flight tx
+/// to commit, resync, and REBUILD (re-execute, since the proof is bound to the stale initial state).
+/// Only this specific rejection is retried; ambiguous transport/timeout errors are not, so we never
+/// risk a double mint.
 async fn submit_batch(
     client: &mut Client<FilesystemKeyStore>,
     faucet_id: AccountId,
     request: TransactionRequest,
     provers: &Provers,
 ) -> Result<(TransactionId, BlockNumber), ClientError> {
-    let tx_result = execute_with_retry(client, faucet_id, &request).await?;
-    let tx_id = tx_result.executed_transaction().id();
+    const SUBMIT_ATTEMPTS: u32 = 3;
+    let mut last_err = None;
+    for submit_attempt in 1..=SUBMIT_ATTEMPTS {
+        let tx_result = execute_with_retry(client, faucet_id, &request).await?;
+        let tx_id = tx_result.executed_transaction().id();
 
-    // Prove the SAME executed transaction: remote first (fast when healthy), local as fallback.
-    let mut proven = None;
-    if let Some(remote) = &provers.remote {
-        for attempt in 1..=provers.remote_attempts {
-            match client.prove_transaction_with(&tx_result, remote.clone()).await {
-                Ok(p) => {
-                    proven = Some(p);
-                    break;
-                }
-                Err(e @ ClientError::TransactionProvingError(_)) => {
-                    tracing::warn!(attempt, max = provers.remote_attempts, error = %e, "remote proving failed");
-                    if attempt < provers.remote_attempts {
-                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        // Prove the SAME executed transaction: remote first (fast when healthy), local as fallback.
+        let mut proven = None;
+        if let Some(remote) = &provers.remote {
+            for attempt in 1..=provers.remote_attempts {
+                match client.prove_transaction_with(&tx_result, remote.clone()).await {
+                    Ok(p) => {
+                        proven = Some(p);
+                        break;
                     }
+                    Err(e @ ClientError::TransactionProvingError(_)) => {
+                        tracing::warn!(attempt, max = provers.remote_attempts, error = %e, "remote proving failed");
+                        if attempt < provers.remote_attempts {
+                            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                        }
+                    }
+                    Err(e) => return Err(e),
                 }
-                Err(e) => return Err(e),
+            }
+        }
+        let proven = match proven {
+            Some(p) => p,
+            None => {
+                if provers.remote.is_some() {
+                    tracing::warn!("remote prover exhausted — falling back to LOCAL proving");
+                }
+                client.prove_transaction_with(&tx_result, provers.local.clone()).await?
+            }
+        };
+
+        match client.submit_proven_transaction(proven, &tx_result).await {
+            Ok(height) => {
+                client.apply_transaction(&tx_result, height).await?;
+                return Ok((tx_id, height));
+            }
+            Err(e) => {
+                // A mempool-head conflict is safe to rebuild (the tx was rejected, not applied); wait
+                // ~1 block for the in-flight tx to commit, resync, and let the loop re-execute. Any
+                // other error is returned as-is — we must not blindly resubmit an ambiguous failure.
+                if is_mempool_state_conflict(&e) && submit_attempt < SUBMIT_ATTEMPTS {
+                    tracing::warn!(
+                        attempt = submit_attempt,
+                        max = SUBMIT_ATTEMPTS,
+                        error = %e,
+                        "submit conflicted with mempool head — waiting one block, resyncing, and rebuilding"
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(3000)).await;
+                    if let Err(sync_err) = client.sync_state().await {
+                        tracing::warn!(error = %sync_err, "resync after mempool conflict failed (continuing)");
+                    }
+                    last_err = Some(e);
+                } else {
+                    return Err(e);
+                }
             }
         }
     }
-    let proven = match proven {
-        Some(p) => p,
-        None => {
-            if provers.remote.is_some() {
-                tracing::warn!("remote prover exhausted — falling back to LOCAL proving");
-            }
-            client.prove_transaction_with(&tx_result, provers.local.clone()).await?
-        }
-    };
+    Err(last_err.expect("loop only continues after storing a conflict error"))
+}
 
-    let height = client.submit_proven_transaction(proven, &tx_result).await?;
-    client.apply_transaction(&tx_result, height).await?;
-    Ok((tx_id, height))
+/// True when the node rejected the submitted transaction with a gRPC `InvalidArgument`. For
+/// `SubmitProvenTransaction` this is the `AccountCommitmentMismatch`: our tx's base state is behind the
+/// mempool head because a prior mint for the account is still in-flight. `InvalidArgument` means the
+/// node evaluated and REJECTED the transaction, so nothing landed on-chain — it is safe to resync,
+/// rebuild, and resubmit. Transport/timeout failures use other gRPC codes and are intentionally NOT
+/// matched here, since blindly resubmitting an ambiguous failure could double-mint.
+fn is_mempool_state_conflict(e: &ClientError) -> bool {
+    matches!(
+        e,
+        ClientError::RpcError(RpcError::RequestError { error_kind: GrpcError::InvalidArgument, .. })
+    )
 }
 
 /// Build one P2ID note per job, mint them all in a single transaction, and reply
