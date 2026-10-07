@@ -13,7 +13,7 @@
 # consuming that note, and answers mints for it with 503 until it arrives.
 
 [rpc]
-# Miden node gRPC endpoint. Testnet runs the 0.16 protocol this client speaks.
+# Miden node gRPC endpoint. Testnet runs the 0.17 protocol this client speaks.
 endpoint = "https://rpc.testnet.miden.io"
 timeout_ms = 10000
 # Optional: offload STARK proving to a remote prover (much less CPU on this host).

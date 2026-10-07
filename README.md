@@ -140,8 +140,8 @@ When the faucet is deployed behind a URL, a lighter black-box variant can simply
 
 ## Dependencies
 
-The miden crates use the crates.io `miden-client = "0.15"` release, which speaks
-the 0.15 protocol the testnet node at `rpc.testnet.miden.io` runs — so the client
+The miden crates use the crates.io `miden-client = "0.17"` release, which speaks
+the 0.17 protocol the testnet node at `rpc.testnet.miden.io` runs — so the client
 handshakes cleanly and minted notes are compatible with the wallet/DEX on testnet.
 All types come from `miden-client` re-exports. To target a different node, set the
 `endpoint` in `faucet.toml` and bump `miden-client`/`miden-client-sqlite-store` to the

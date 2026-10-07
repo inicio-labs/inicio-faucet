@@ -34,10 +34,9 @@ use miden_client::keystore::{FilesystemKeyStore, Keystore};
 use miden_client::note::{Note, NoteDetails, NoteFile, NoteSyncHint, NoteType, P2idNote};
 use miden_client::rpc::{AddTransactionError, Endpoint, EndpointError};
 use miden_client::transaction::{
-    LocalTransactionProver, ProvingOptions, TransactionId, TransactionProver, TransactionRequest,
+    LocalTransactionProver, Prover, TransactionId, TransactionProver, TransactionRequest,
     TransactionRequestBuilder, TransactionResult,
 };
-use miden_client::utils::Serializable;
 use miden_client::{Client, ClientError, RemoteTransactionProver};
 use miden_client_sqlite_store::SqliteStore;
 use tokio::sync::{mpsc, oneshot};
@@ -167,10 +166,10 @@ async fn build_client(
     let keystore = FilesystemKeyStore::new(PathBuf::from(&token.keystore_path))
         .map_err(|e| anyhow::anyhow!("failed to create keystore: {e}"))?;
 
-    let account_file = AccountFile::read(&token.account_file)
-        .with_context(|| format!("failed to read account file {}", token.account_file))?;
-    let account_id = account_file.account.id();
-    let AccountFile { account, auth_secret_keys } = account_file;
+    let (account, auth_secret_keys) = AccountFile::read(&token.account_file)
+        .with_context(|| format!("failed to read account file {}", token.account_file))?
+        .into_parts();
+    let account_id = account.id();
     for key in &auth_secret_keys {
         keystore
             .add_key(key, account_id)
@@ -194,7 +193,7 @@ async fn build_client(
         remote: rpc.remote_prover_url.as_ref().map(|url| {
             Arc::new(RemoteTransactionProver::new(url.clone())) as Arc<dyn TransactionProver>
         }),
-        local: Arc::new(LocalTransactionProver::new(ProvingOptions::default())),
+        local: Arc::new(LocalTransactionProver::new(Prover::default())),
         remote_attempts: rpc.remote_prover_attempts.max(1),
     };
 
@@ -256,7 +255,7 @@ async fn sync_with_retry(client: &mut Client<FilesystemKeyStore>) -> Result<(), 
     Err(last_err.expect("loop runs at least once"))
 }
 
-/// The chain's fee parameters, from the latest synced block header.
+/// The chain's fee parameters, as of the latest synced block.
 struct Fees {
     base_fee: u64,
     fee_faucet_id: AccountId,
@@ -271,10 +270,12 @@ impl Fees {
 
 async fn fee_parameters(client: &Client<FilesystemKeyStore>) -> Result<Fees, ClientError> {
     let header = client.get_latest_block_header().await?;
-    let params = header.fee_parameters();
+    // The header carries the base fee, but the fee asset lives in the chain's protocol
+    // configuration, which the client stores during sync; the header only commits to it.
+    let config = client.get_protocol_config(header.protocol_config_commitment()).await?;
     Ok(Fees {
-        base_fee: u64::from(params.verification_base_fee()),
-        fee_faucet_id: params.fee_faucet_id(),
+        base_fee: u64::from(header.fee_parameters().verification_base_fee()),
+        fee_faucet_id: config.fee_asset_id().faucet_id(),
     })
 }
 
