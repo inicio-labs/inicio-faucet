@@ -62,6 +62,12 @@ pub struct TokenConfig {
     pub store_path: String,
     /// Per-faucet keystore directory.
     pub keystore_path: String,
+    /// Invitation code the faucet registers with before it deploys (see
+    /// `worker::register_for_funding`). A network that enforces an account allowlist needs one;
+    /// one without enforcement (the public testnet) accepts any code, so leave it unset there.
+    /// Each code binds one account. It is a secret: it is never logged.
+    #[serde(default)]
+    pub invitation_code: Option<String>,
     /// Optional cap on the amount mintable per request (base units). Unset = uncapped.
     #[serde(default)]
     pub max_mint_amount: Option<u64>,

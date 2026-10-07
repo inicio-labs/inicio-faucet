@@ -107,8 +107,9 @@ pub fn run(args: &CreateFaucetArgs) -> Result<()> {
     println!("  written to: {}", args.out);
     println!();
     println!("Add a [[tokens]] entry to faucet.toml referencing this .mac, with its own");
-    println!("store_path and keystore_path. On a fee-charging chain, send the address some");
-    println!("native MIDEN (the fee asset) before starting: the service deploys the faucet by");
-    println!("consuming that note, and answers mints for it with 503 until it arrives.");
+    println!("store_path and keystore_path. On a fee-charging chain the faucet needs native");
+    println!("MIDEN (the fee asset) to deploy: on start the service registers it with the network,");
+    println!("which sends that note if it funds registrations; otherwise send some to the address.");
+    println!("The service deploys the faucet by consuming the note, and answers 503 until then.");
     Ok(())
 }

@@ -12,7 +12,9 @@
 //! Fees: on a fee-charging chain every transaction pays a fee in the chain's native asset
 //! from the faucet's own vault (the client attaches the payment automatically). A brand-new
 //! faucet has an empty vault, so it deploys by consuming a funding note of the native asset
-//! sent to it; until one arrives it answers mints with 503 and keeps checking.
+//! sent to it; until one arrives it answers mints with 503 and keeps checking. On start, an
+//! undeployed faucet registers with the network, which on a network that funds registrations
+//! sends it that note (see [`register_for_funding`]).
 
 // Functions here return miden-client's `ClientError`, which is large (>128 bytes) as of 0.16.
 // It's the library's type and only travels on the (rare) error path, so boxing it everywhere
@@ -32,7 +34,9 @@ use miden_client::block::BlockNumber;
 use miden_client::builder::ClientBuilder;
 use miden_client::keystore::{FilesystemKeyStore, Keystore};
 use miden_client::note::{Note, NoteDetails, NoteFile, NoteSyncHint, NoteType, P2idNote};
-use miden_client::rpc::{AddTransactionError, Endpoint, EndpointError};
+use miden_client::rpc::{
+    AddTransactionError, Endpoint, EndpointError, GrpcClient, NodeRpcClient, RegisterAccountError,
+};
 use miden_client::transaction::{
     LocalTransactionProver, Prover, TransactionId, TransactionProver, TransactionRequest,
     TransactionRequestBuilder, TransactionResult,
@@ -116,6 +120,12 @@ async fn worker_loop(params: WorkerParams) {
         }
     };
     tracing::info!(token = %symbol, faucet = %faucet.id, address = %faucet.address, "faucet worker ready");
+
+    // Ask the network to fund a faucet that isn't on-chain yet. The note takes a few blocks to
+    // commit, so the first deploy attempt below may still find nothing; the retry picks it up.
+    if needs_deploy {
+        register_for_funding(&client, &rpc, &token, &faucet).await;
+    }
 
     // A new faucet deploys right away if it's funded. If not, keep serving — mints for this token
     // are answered 503 with the address to fund — and retry until a funding note arrives.
@@ -301,6 +311,75 @@ async fn consumable_notes(
         .into_iter()
         .filter_map(|(record, _)| TryInto::<Note>::try_into(record).ok())
         .collect())
+}
+
+/// Register a not-yet-deployed faucet with the network, so the network can fund its deployment.
+///
+/// A node binds an invitation code to a new account with `RegisterAccount`. If its sequencer funds
+/// registrations, a NEW registration also sends the account a public P2ID note of the native
+/// asset — the funding note [`deploy_faucet`] consumes — so the faucet deploys itself with no manual
+/// top-up. A network that doesn't enforce an allowlist (the public testnet) accepts any code,
+/// including an empty one. Registering an account again changes nothing and never funds it twice,
+/// so this runs on every start of an undeployed faucet. It never fails the worker: without a
+/// funding note the faucet keeps answering mints with 503 and its address, to be funded by hand.
+///
+/// This calls the RPC directly. `Client::register_account` returns `AccountAlreadyAllowed` without
+/// sending anything when the node already admits the account, which is always the case on a
+/// network without allowlist enforcement, so it would never trigger the funding.
+async fn register_for_funding(
+    client: &Client<FilesystemKeyStore>,
+    rpc: &RpcConfig,
+    token: &TokenConfig,
+    faucet: &Faucet,
+) {
+    let endpoint = match Endpoint::try_from(rpc.endpoint.as_str()) {
+        Ok(endpoint) => endpoint,
+        Err(e) => {
+            tracing::warn!(token = %faucet.symbol, error = %e, "invalid rpc endpoint; skipping registration");
+            return;
+        }
+    };
+    // The node checks the request against the network's genesis, as it does for submissions.
+    let genesis = match client.get_block_header_by_num(BlockNumber::GENESIS).await {
+        Ok(Some((header, _))) => header.commitment(),
+        Ok(None) => {
+            tracing::warn!(token = %faucet.symbol, "genesis header not in the store; skipping registration");
+            return;
+        }
+        Err(e) => {
+            tracing::warn!(token = %faucet.symbol, error = %e, "could not read the genesis header; skipping registration");
+            return;
+        }
+    };
+    let node = GrpcClient::new(&endpoint, rpc.timeout_ms);
+    if let Err(e) = node.set_genesis_commitment(genesis).await {
+        tracing::warn!(token = %faucet.symbol, error = %e, "could not set the genesis commitment; skipping registration");
+        return;
+    }
+
+    // The invitation code is a secret: it never goes into a log line.
+    let code = token.invitation_code.as_deref().unwrap_or("");
+    match node.register_account(code, faucet.id).await {
+        Ok(()) => tracing::info!(
+            token = %faucet.symbol,
+            address = %faucet.address,
+            "registered with the network; if it funds registrations, the funding note is on its way"
+        ),
+        Err(e)
+            if matches!(
+                e.endpoint_error(),
+                Some(EndpointError::RegisterAccount(RegisterAccountError::AlreadyRegistered))
+            ) =>
+        {
+            tracing::info!(token = %faucet.symbol, "already registered with the network");
+        }
+        Err(e) => tracing::warn!(
+            token = %faucet.symbol,
+            address = %faucet.address,
+            error = %e,
+            "could not register with the network; fund the faucet by hand"
+        ),
+    }
 }
 
 fn not_funded_message(faucet: &Faucet) -> String {
