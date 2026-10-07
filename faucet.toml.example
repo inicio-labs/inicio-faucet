@@ -8,9 +8,11 @@
 # (repeat for TOKB / TOKC / TOKD), then reference them below.
 #
 # Testnet charges transaction fees in native MIDEN, paid from each faucet's own
-# vault. Before the first start, send some MIDEN (e.g. from the official testnet
-# faucet) to each address `create-faucet` prints: the service deploys a faucet by
-# consuming that note, and answers mints for it with 503 until it arrives.
+# vault. On start, the service registers each undeployed faucet with the network;
+# a network that funds registrations then sends it a MIDEN note, and the service
+# deploys the faucet by consuming it. On a network that doesn't, send some MIDEN
+# (e.g. from the official testnet faucet) to each address `create-faucet` prints.
+# Until a faucet is funded, mints for it answer 503 with its address.
 
 [rpc]
 # Miden node gRPC endpoint. Testnet runs the 0.17 protocol this client speaks.
@@ -34,6 +36,9 @@ store_path = "./faucets/toka.sqlite3"
 keystore_path = "./faucets/toka_keystore"
 # Optional: cap the amount mintable per request (base units). Omit for uncapped.
 # max_mint_amount = 100000000000
+# Optional: invitation code to register the faucet with (one code per account).
+# Only needed on a network that enforces an account allowlist; testnet doesn't.
+# invitation_code = "..."
 
 [[tokens]]
 symbol = "TOKB"
