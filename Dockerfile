@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # ---- build stage ----
-# Pinned: miden-client 0.16 needs Rust 1.98.1 or newer.
+# Pinned: miden-client 0.17 needs Rust 1.98.1 or newer.
 FROM rust:1.98.1-bookworm AS builder
 WORKDIR /src
 COPY . .

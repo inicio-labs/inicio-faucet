@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
-      # Testnet runs the 0.15 protocol this client speaks. Override with the
+      # Testnet runs the 0.17 protocol this client speaks. Override with the
       # MIDEN_RPC_ENDPOINT repo variable to point at a different node.
       RPC_ENDPOINT: ${{ vars.MIDEN_RPC_ENDPOINT || 'https://rpc.testnet.miden.io' }}
     steps:

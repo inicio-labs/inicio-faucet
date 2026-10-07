@@ -4,12 +4,12 @@ version = "0.1.0"
 edition = "2021"
 description = "Internal-only faucet service: mints test tokens (P2ID notes) to wallet addresses for testing the wallet and the nProtocol DEX."
 
-# Miden crates track the crates.io 0.16 release line — the protocol the public
-# testnet (rpc.testnet.miden.io) runs since its 2026-09-09 reset. All types are
+# Miden crates track the crates.io 0.17 release line — the protocol the public
+# testnet (rpc.testnet.miden.io) runs since its October 2026 reset. All types are
 # pulled from `miden-client` re-exports (no direct protocol/standards deps).
 [dependencies]
-miden-client = { version = "0.16", features = ["tonic"] }
-miden-client-sqlite-store = "0.16"
+miden-client = { version = "0.17", features = ["tonic"] }
+miden-client-sqlite-store = "0.17"
 
 tokio = { version = "1.40", features = ["rt", "rt-multi-thread", "macros", "sync", "time", "signal"] }
 tokio-util = { version = "0.7", default-features = false, features = ["rt"] }

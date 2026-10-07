@@ -4,7 +4,7 @@
 //! needs some of the chain's native asset (MIDEN) sent to its address to pay the
 //! deployment fee.
 //!
-//! Uses the crates.io miden-client 0.16 faucet model
+//! Uses the crates.io miden-client 0.17 faucet model
 //! (`create_singlesig_user_fungible_faucet` + `TokenPolicyManager`).
 
 use anyhow::{Context, Result};
